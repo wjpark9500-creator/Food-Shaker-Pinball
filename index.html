@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>오늘 뭐 먹지? 🎯 실시간 핀볼</title>
+<meta name="description" content="가족과 함께 실시간으로, 조작 불가능하게 저녁 메뉴를 정하는 핀볼 게임">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Noto+Sans+KR:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<style>
+  :root{
+    --bg-1:#0a0518; --bg-2:#160a2e; --neon-pink:#ff2fd0; --neon-cyan:#2ff9ff;
+    --neon-yellow:#ffe62f; --neon-green:#39ff88; --neon-purple:#b14bff; --neon-orange:#ff8c2f;
+    --ink:#f4f0ff;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg-1);color:var(--ink);font-family:'Noto Sans KR',sans-serif;
+    min-height:100%;overflow-x:hidden;}
+  body{
+    background:
+      radial-gradient(circle at 20% 0%, rgba(255,47,208,.18), transparent 45%),
+      radial-gradient(circle at 80% 10%, rgba(47,249,255,.16), transparent 45%),
+      radial-gradient(circle at 50% 100%, rgba(177,75,255,.20), transparent 50%),
+      linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  h1,h2,h3{font-family:'Orbitron',sans-serif; letter-spacing:.03em; margin:0 0 8px;}
+  .title{
+    text-align:center; font-size:clamp(22px,6vw,34px); font-weight:900;
+    background:linear-gradient(90deg,var(--neon-pink),var(--neon-cyan),var(--neon-yellow));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    text-shadow:0 0 24px rgba(255,255,255,.15);
+    margin-bottom:4px;
+  }
+  .subtitle{text-align:center; opacity:.75; font-size:14px; margin-bottom:22px;}
+  .wrap{max-width:460px; margin:0 auto;}
+  .card{
+    background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.12);
+    border-radius:18px; padding:18px; margin-bottom:16px;
+    box-shadow:0 0 30px rgba(177,75,255,.08), inset 0 0 40px rgba(255,255,255,.02);
+    backdrop-filter: blur(6px);
+  }
+  .opt-row{display:flex; gap:8px; margin-bottom:8px;}
+  input[type=text]{
+    flex:1; padding:12px 14px; border-radius:12px; border:1px solid rgba(255,255,255,.18);
+    background:rgba(0,0,0,.35); color:var(--ink); font-size:15px; outline:none;
+  }
+  input[type=text]:focus{border-color:var(--neon-cyan); box-shadow:0 0 0 3px rgba(47,249,255,.15);}
+  button{
+    font-family:'Noto Sans KR',sans-serif; font-weight:800; cursor:pointer; border:none;
+    border-radius:12px; padding:12px 16px; font-size:15px; color:#0a0518;
+  }
+  button:disabled{opacity:.5; cursor:not-allowed;}
+  .btn-ghost{
+    background:rgba(255,255,255,.08); color:var(--ink); border:1px solid rgba(255,255,255,.2);
+  }
+  .btn-main{
+    width:100%; font-size:18px; padding:16px; margin-top:6px;
+    background:linear-gradient(90deg,var(--neon-pink),var(--neon-purple));
+    color:#fff; box-shadow:0 0 26px rgba(255,47,208,.45);
+    animation:pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{box-shadow:0 0 18px rgba(255,47,208,.35);}50%{box-shadow:0 0 34px rgba(255,47,208,.65);}}
+  .launch-btn{
+    width:100%; font-size:20px; padding:18px; margin-top:10px;
+    background:linear-gradient(90deg,var(--neon-yellow),var(--neon-orange));
+    color:#1a0a00; box-shadow:0 0 30px rgba(255,230,47,.5);
+    animation:pulse2 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse2{0%,100%{transform:scale(1);}50%{transform:scale(1.02);}}
+  .row{display:flex; gap:8px; align-items:center;}
+  .badge{
+    display:inline-block; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:800;
+    letter-spacing:.05em;
+  }
+  .badge.collecting{background:rgba(47,249,255,.15); color:var(--neon-cyan); border:1px solid var(--neon-cyan);}
+  .badge.launched{background:rgba(255,230,47,.15); color:var(--neon-yellow); border:1px solid var(--neon-yellow);}
+  .badge.done{background:rgba(57,255,136,.15); color:var(--neon-green); border:1px solid var(--neon-green);}
+  #shareBox{display:none;}
+  #shareLink{
+    width:100%; padding:12px; border-radius:12px; background:rgba(0,0,0,.4);
+    border:1px dashed rgba(255,255,255,.3); color:var(--neon-cyan); font-size:13px;
+    word-break:break-all; margin-bottom:8px;
+  }
+  canvas{
+    display:block; width:100%; max-width:420px; margin:0 auto; border-radius:16px;
+    background:radial-gradient(circle at 50% 0%, #1a0f33, #06030f 70%);
+    border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 0 40px rgba(47,249,255,.12), inset 0 0 60px rgba(0,0,0,.6);
+  }
+  #resultBanner{
+    display:none; text-align:center; padding:22px; border-radius:18px; margin-top:14px;
+    background:linear-gradient(135deg, rgba(57,255,136,.15), rgba(47,249,255,.12));
+    border:1px solid var(--neon-green); box-shadow:0 0 40px rgba(57,255,136,.3);
+  }
+  #resultBanner .label{font-size:13px; opacity:.8; margin-bottom:6px;}
+  #resultBanner .value{font-family:'Orbitron',sans-serif; font-size:clamp(24px,7vw,36px); font-weight:900; color:#fff; text-shadow:0 0 20px var(--neon-green);}
+  details{margin-top:14px; font-size:13px; opacity:.85;}
+  summary{cursor:pointer; font-weight:700; color:var(--neon-cyan);}
+  .fair-grid{margin-top:10px; display:grid; grid-template-columns:auto 1fr; gap:4px 10px; font-family:monospace; font-size:12.5px;}
+  .hint{font-size:12.5px; opacity:.65; margin-top:6px; line-height:1.5;}
+  #err{color:#ff6b6b; font-size:13px; margin-top:8px; display:none;}
+  .footer-note{text-align:center; font-size:11.5px; opacity:.4; margin-top:26px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title">오늘 뭐 먹지?</div>
+  <div class="subtitle">실시간 · 조작 불가능 · 투명한 저녁 메뉴 핀볼</div>
+
+  <!-- ===== 닉네임 게이트 (예외 없이 최우선) ===== -->
+  <div id="nicknameGate" class="card" style="display:none;">
+    <h2>닉네임을 입력해주세요</h2>
+    <p class="hint">닉네임이 있어야 방 목록을 보고 게임에 참여할 수 있어요.</p>
+    <div class="opt-row">
+      <input type="text" id="nicknameInput" placeholder="예: 원재" maxlength="12">
+    </div>
+    <button class="btn-main" id="nicknameSubmitBtn" type="button">입장하기</button>
+    <div id="nickErr" style="color:#ff6b6b; font-size:13px; margin-top:8px; display:none;"></div>
+  </div>
+
+  <!-- ===== 로비 (닉네임 통과 후, 방 없이 접속했을 때) ===== -->
+  <div id="lobbyView" style="display:none;">
+    <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+      <div>👋 <b id="nicknameDisplay"></b>님</div>
+      <button class="btn-ghost" id="changeNickBtn" type="button" style="font-size:12px; padding:8px 12px;">닉네임 변경</button>
+    </div>
+    <div class="card">
+      <button class="btn-main" id="openCreateBtn" type="button">➕ 새 핀볼 방 만들기</button>
+    </div>
+    <div class="card">
+      <h2>방 목록</h2>
+      <div id="roomList" class="hint">불러오는 중...</div>
+    </div>
+  </div>
+
+  <!-- ===== 설정 화면 (방 만들기) ===== -->
+  <div id="setupView" class="card" style="display:none;">
+    <button class="btn-ghost" id="backToLobbyBtn" type="button" style="margin-bottom:10px;">← 방 목록으로</button>
+    <h2>후보 메뉴 입력</h2>
+    <p class="hint">2~8개까지 입력할 수 있어요. 게임을 만들고 나면 후보를 바꿀 수 없어요(공정성을 위해서예요).</p>
+    <div id="optList"></div>
+    <div class="row" style="margin:10px 0 4px;">
+      <button class="btn-ghost" id="addOptBtn" type="button">+ 메뉴 추가</button>
+    </div>
+    <button class="btn-main" id="createBtn" type="button">🎯 게임 만들고 링크 공유하기</button>
+    <div id="err"></div>
+    <div id="shareBox">
+      <p class="hint" style="margin-top:14px;">아래 링크를 가족 단톡방에 공유하세요. 각자 자기 폰/PC에서 열면 됩니다.</p>
+      <input id="shareLink" readonly>
+      <div class="row">
+        <button class="btn-ghost" id="copyBtn" type="button" style="flex:1;">📋 링크 복사</button>
+        <button class="btn-main" id="goBtn" type="button" style="flex:1; margin:0;">지금 입장하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 게임 화면 (?game=ID 로 접속했을 때) ===== -->
+  <div id="gameView" style="display:none;">
+    <div class="card" style="text-align:center;">
+      <span class="badge collecting" id="statusBadge">대기 중</span>
+      <div id="waitingHint" class="hint" style="margin-top:10px;">모두 모이면 아무나 아래 버튼을 눌러 발사하세요. 한 번 발사하면 결과는 절대 바뀌지 않아요.</div>
+    </div>
+
+    <canvas id="board" width="380" height="640"></canvas>
+
+    <button class="launch-btn" id="launchBtn" type="button">🚀 발사!</button>
+
+    <div id="resultBanner">
+      <div class="label">🎉 오늘의 저녁 메뉴는...</div>
+      <div class="value" id="resultValue"></div>
+    </div>
+
+    <details class="card" id="fairDetails">
+      <summary>🔍 공정성 검증 (어떻게 결정됐는지 보기)</summary>
+      <div class="fair-grid" id="fairGrid"></div>
+      <p class="hint">이 값들은 Supabase DB에 영구 저장되며, 게임이 끝나면(status=done) 데이터베이스 규칙(RLS)상 그 누구도 — 이 앱을 만든 사람조차 — 수정할 수 없습니다.</p>
+    </details>
+
+    <div class="row" style="margin-top:14px;">
+      <button class="btn-ghost" id="newGameBtn" type="button" style="width:100%;">+ 새 게임 만들기</button>
+    </div>
+  </div>
+
+  <div class="footer-note">Made with 🍗 for family dinner decisions</div>
+</div>
+
+<script>
+/* ====================== 설정: Supabase 프로젝트 정보 ======================
+   Supabase 대시보드 > Project Settings > API 에서 값을 복사해 아래 두 줄을 채우세요.
+   ========================================================================== */
+const SUPABASE_URL = "여기에_SUPABASE_URL_입력";
+const SUPABASE_ANON_KEY = "여기에_SUPABASE_ANON_KEY_입력";
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const LANE_COLORS = ["#ff2fd0","#2ff9ff","#ffe62f","#39ff88","#b14bff","#ff8c2f","#ff5566","#66ffcc"];
+
+const params = new URLSearchParams(location.search);
+const gameId = params.get("game");
+
+const setupView = document.getElementById("setupView");
+const gameView = document.getElementById("gameView");
+const lobbyView = document.getElementById("lobbyView");
+const nicknameGate = document.getElementById("nicknameGate");
+
+const NICK_KEY = "pinball_nickname";
+const getNickname = () => localStorage.getItem(NICK_KEY) || "";
+const setNickname = (n) => localStorage.setItem(NICK_KEY, n);
+
+/* ====================== 라우팅: 닉네임 게이트 → 로비/게임 ====================== */
+function boot(){
+  if (!getNickname()){
+    showNicknameGate();
+  } else {
+    afterNickname();
+  }
+}
+
+function showNicknameGate(){
+  setupView.style.display = "none";
+  gameView.style.display = "none";
+  lobbyView.style.display = "none";
+  nicknameGate.style.display = "block";
+}
+
+document.getElementById("nicknameSubmitBtn").addEventListener("click", ()=>{
+  const val = document.getElementById("nicknameInput").value.trim();
+  const err = document.getElementById("nickErr");
+  if (!val){
+    err.textContent = "닉네임을 입력해주세요.";
+    err.style.display = "block";
+    return;
+  }
+  setNickname(val.slice(0,12));
+  nicknameGate.style.display = "none";
+  afterNickname();
+});
+document.getElementById("nicknameInput").addEventListener("keydown",(e)=>{
+  if (e.key === "Enter") document.getElementById("nicknameSubmitBtn").click();
+});
+
+function afterNickname(){
+  document.getElementById("nicknameDisplay").textContent = getNickname();
+  if (gameId){
+    setupView.style.display = "none";
+    lobbyView.style.display = "none";
+    gameView.style.display = "block";
+    initGameView(gameId);
+  } else {
+    setupView.style.display = "none";
+    gameView.style.display = "none";
+    lobbyView.style.display = "block";
+    initLobby();
+  }
+}
+
+document.getElementById("changeNickBtn").addEventListener("click", ()=>{
+  localStorage.removeItem(NICK_KEY);
+  showNicknameGate();
+});
+document.getElementById("openCreateBtn").addEventListener("click", ()=>{
+  lobbyView.style.display = "none";
+  setupView.style.display = "block";
+});
+document.getElementById("backToLobbyBtn").addEventListener("click", ()=>{
+  setupView.style.display = "none";
+  lobbyView.style.display = "block";
+});
+
+/* ====================== 로비 (방 목록) ====================== */
+let lobbySubscribed = false;
+
+function initLobby(){
+  loadRoomList();
+  if (!lobbySubscribed){
+    lobbySubscribed = true;
+    sb.channel("lobby-rooms")
+      .on("postgres_changes", { event:"*", schema:"public", table:"games" }, ()=> loadRoomList())
+      .subscribe();
+  }
+}
+
+async function loadRoomList(){
+  const { data, error } = await sb.from("games")
+    .select("*").order("created_at", { ascending:false }).limit(20);
+  renderRoomList(error ? [] : (data||[]));
+}
+
+function renderRoomList(rows){
+  const box = document.getElementById("roomList");
+  if (!rows.length){
+    box.innerHTML = "아직 만들어진 방이 없어요. 첫 방을 만들어보세요!";
+    return;
+  }
+  box.innerHTML = "";
+  rows.forEach(row=>{
+    const statusLabel = row.status === "collecting" ? "🟢 대기중"
+      : row.status === "launched" ? "🟡 발사됨"
+      : "✅ " + row.result_text;
+    const extra = row.options.length > 3 ? ` 외 ${row.options.length-3}개` : "";
+    const maker = row.created_by ? `${row.created_by}님이 만듦 · ` : "";
+    const item = document.createElement("div");
+    item.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08);";
+    item.innerHTML = `
+      <div style="min-width:0;">
+        <div style="font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${row.options.slice(0,3).join(", ")}${extra}</div>
+        <div style="font-size:12px; opacity:.6;">${maker}${statusLabel} · ${timeAgo(row.created_at)}</div>
+      </div>`;
+    const btn = document.createElement("button");
+    btn.className = "btn-ghost";
+    btn.style.flexShrink = "0";
+    btn.textContent = "입장";
+    btn.onclick = ()=> location.href = `${location.pathname}?game=${row.id}`;
+    item.appendChild(btn);
+    box.appendChild(item);
+  });
+}
+
+function timeAgo(iso){
+  const diff = Math.floor((Date.now() - new Date(iso).getTime())/1000);
+  if (diff < 60) return "방금 전";
+  if (diff < 3600) return Math.floor(diff/60) + "분 전";
+  if (diff < 86400) return Math.floor(diff/3600) + "시간 전";
+  return Math.floor(diff/86400) + "일 전";
+}
+
+boot();
+initSetupView();
+
+/* ====================== 설정 화면 (방 만들기) ====================== */
+function initSetupView(){
+  const optList = document.getElementById("optList");
+  const addOptBtn = document.getElementById("addOptBtn");
+  const createBtn = document.getElementById("createBtn");
+  const errBox = document.getElementById("err");
+
+  function addRow(value=""){
+    const rows = optList.querySelectorAll(".opt-row").length;
+    if (rows >= 8) return;
+    const row = document.createElement("div");
+    row.className = "opt-row";
+    row.innerHTML = `<input type="text" placeholder="예: 치킨" maxlength="20" value="${value}">
+      <button class="btn-ghost" type="button" onclick="this.parentElement.remove()">✕</button>`;
+    optList.appendChild(row);
+  }
+  addRow(); addRow();
+  addOptBtn.addEventListener("click", ()=>addRow());
+
+  createBtn.addEventListener("click", async ()=>{
+    errBox.style.display = "none";
+    const values = [...optList.querySelectorAll("input")]
+      .map(i=>i.value.trim()).filter(Boolean);
+    const unique = [...new Set(values)];
+    if (unique.length < 2){
+      errBox.textContent = "메뉴를 2개 이상 입력해주세요.";
+      errBox.style.display = "block";
+      return;
+    }
+    createBtn.disabled = true;
+    createBtn.textContent = "만드는 중...";
+    const { data, error } = await sb.from("games")
+      .insert({ options: unique, created_by: getNickname() })
+      .select().single();
+    if (error){
+      errBox.textContent = "생성 실패: " + error.message + " (Supabase 설정을 확인하세요)";
+      errBox.style.display = "block";
+      createBtn.disabled = false;
+      createBtn.textContent = "🎯 게임 만들고 링크 공유하기";
+      return;
+    }
+    const link = `${location.origin}${location.pathname}?game=${data.id}`;
+    document.getElementById("shareLink").value = link;
+    document.getElementById("shareBox").style.display = "block";
+    document.getElementById("copyBtn").onclick = ()=>{
+      navigator.clipboard.writeText(link);
+      document.getElementById("copyBtn").textContent = "✅ 복사됨";
+    };
+    document.getElementById("goBtn").onclick = ()=> location.href = link;
+    createBtn.style.display = "none";
+  });
+}
+
+/* ====================== 게임 화면 ====================== */
+let state = { options: [], status: "collecting", seed: null, resultIndex: null, resultText: null, animationStarted:false };
+let canvas, ctx;
+
+function initGameView(id){
+  canvas = document.getElementById("board");
+  ctx = canvas.getContext("2d");
+  document.getElementById("launchBtn").addEventListener("click", ()=>launchBall(id));
+  document.getElementById("newGameBtn").addEventListener("click", ()=> location.href = location.pathname);
+
+  loadGame(id);
+  subscribeRealtime(id);
+  requestAnimationFrame(idleDraw);
+}
+
+async function loadGame(id){
+  const { data, error } = await sb.from("games").select("*").eq("id", id).single();
+  if (error || !data){
+    document.getElementById("waitingHint").textContent = "게임을 찾을 수 없어요. 링크를 다시 확인해주세요.";
+    return;
+  }
+  applyRow(data);
+}
+
+function subscribeRealtime(id){
+  sb.channel("game-"+id)
+    .on("postgres_changes", { event:"UPDATE", schema:"public", table:"games", filter:`id=eq.${id}` },
+      (payload)=> applyRow(payload.new))
+    .subscribe();
+}
+
+function applyRow(row){
+  state.options = row.options;
+  state.status = row.status;
+  state.seed = row.seed;
+  state.resultIndex = row.result_index;
+  state.resultText = row.result_text;
+
+  const badge = document.getElementById("statusBadge");
+  if (row.status === "collecting"){
+    badge.textContent = "대기 중"; badge.className = "badge collecting";
+  } else if (row.status === "launched"){
+    badge.textContent = "발사됨!"; badge.className = "badge launched";
+    document.getElementById("launchBtn").disabled = true;
+    const who = row.launched_by ? `${row.launched_by}님이 발사했어요! ` : "";
+    document.getElementById("waitingHint").textContent = who + "공이 굴러가는 중... 결과를 지켜보세요!";
+  } else if (row.status === "done"){
+    badge.textContent = "결정 완료"; badge.className = "badge done";
+    document.getElementById("launchBtn").style.display = "none";
+  }
+
+  if (row.status === "launched" && !state.animationStarted){
+    state.animationStarted = true;
+    const target = computeTargetIndex(row.seed, row.options.length);
+    startPinball(target);
+  }
+  if (row.status === "done"){
+    showResult(row);
+  }
+}
+
+function computeTargetIndex(seed, n){
+  return Math.min(n-1, Math.floor(seed * n));
+}
+
+async function launchBall(id){
+  document.getElementById("launchBtn").disabled = true;
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  const seed = arr[0] / 4294967296;
+  await sb.from("games")
+    .update({ status:"launched", seed, launched_at:new Date().toISOString(), launched_by:getNickname() })
+    .eq("id", id).eq("status","collecting");
+}
+
+async function finalize(id, targetIndex){
+  await sb.from("games")
+    .update({
+      status:"done",
+      result_index: targetIndex,
+      result_text: state.options[targetIndex],
+      result_at: new Date().toISOString()
+    })
+    .eq("id", id).eq("status","launched");
+}
+
+function showResult(row){
+  document.getElementById("resultBanner").style.display = "block";
+  document.getElementById("resultValue").textContent = row.result_text;
+  const grid = document.getElementById("fairGrid");
+  grid.innerHTML = `
+    <div>방 만든 사람</div><div>${row.created_by || "-"}</div>
+    <div>발사한 사람</div><div>${row.launched_by || "-"}</div>
+    <div>후보 목록</div><div>${row.options.join(", ")}</div>
+    <div>랜덤값(seed)</div><div>${row.seed}</div>
+    <div>계산식</div><div>floor(seed × ${row.options.length}) = ${row.result_index}</div>
+    <div>확정 시각</div><div>${new Date(row.result_at).toLocaleString("ko-KR")}</div>
+  `;
+}
+
+/* ====================== 캔버스 그리기 (대기 상태) ====================== */
+function idleDraw(){
+  if (!ctx) return;
+  drawBoardStatic();
+  if (state.status === "collecting") requestAnimationFrame(idleDraw);
+}
+
+function drawBoardStatic(){
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0,0,W,H);
+  drawLanes(state.options);
+  drawTitleZone();
+}
+
+function drawTitleZone(){
+  const W = canvas.width;
+  ctx.save();
+  ctx.font = "700 15px Orbitron, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,.5)";
+  ctx.textAlign = "center";
+  ctx.fillText(state.status==="collecting" ? "발사 대기 중..." : "", W/2, 40);
+  ctx.restore();
+}
+
+function drawLanes(options, highlight=-1){
+  if (!options || !options.length) return;
+  const W = canvas.width, H = canvas.height;
+  const n = options.length;
+  const laneW = W / n;
+  const laneTop = H - 90;
+  for (let i=0;i<n;i++){
+    const x = i*laneW;
+    const color = LANE_COLORS[i % LANE_COLORS.length];
+    ctx.save();
+    ctx.fillStyle = i===highlight ? color : "rgba(255,255,255,.05)";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = i===highlight ? 24 : 6;
+    ctx.beginPath();
+    ctx.roundRect(x+4, laneTop, laneW-8, 82, 10);
+    ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff";
+    ctx.font = "700 12px 'Noto Sans KR', sans-serif";
+    ctx.textAlign = "center";
+    wrapText(options[i], x+laneW/2, laneTop+46, laneW-14, 14);
+    ctx.restore();
+  }
+}
+
+function wrapText(text, cx, cy, maxWidth, lineHeight){
+  const words = text.split("");
+  let line = "", lines = [];
+  for (const ch of words){
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxWidth && line){
+      lines.push(line); line = ch;
+    } else line = test;
+  }
+  lines.push(line);
+  const startY = cy - (lines.length-1)*lineHeight/2;
+  lines.forEach((l,i)=> ctx.fillText(l, cx, startY + i*lineHeight));
+}
+
+/* ====================== 핀볼 물리 시뮬레이션 ====================== */
+function startPinball(targetIndex){
+  const { Engine, World, Bodies, Body } = Matter;
+  const W = canvas.width, H = canvas.height;
+  const engine = Engine.create();
+  engine.gravity.y = 1.1;
+  const world = engine.world;
+
+  const laneCount = state.options.length;
+  const laneW = W / laneCount;
+  const bumperZoneEnd = H - 150;
+
+  World.add(world, [
+    Bodies.rectangle(-8, H/2, 16, H, {isStatic:true}),
+    Bodies.rectangle(W+8, H/2, 16, H, {isStatic:true}),
+  ]);
+
+  const pegs = [];
+  const rows = 7;
+  for (let r=0;r<rows;r++){
+    const y = 90 + r*((bumperZoneEnd-140)/rows);
+    const stagger = r % 2 === 0;
+    const cols = 6;
+    for (let c=0;c<cols;c++){
+      const x = (stagger?30:60) + c*((W-60)/(cols-1));
+      if (x < 15 || x > W-15) continue;
+      pegs.push(Bodies.circle(x,y,6,{isStatic:true, restitution:0.75, friction:0.02}));
+    }
+  }
+  World.add(world, pegs);
+
+  const ball = Bodies.circle(W/2 + (Math.random()-0.5)*50, 22, 9,
+    { restitution:0.5, friction:0.02, frictionAir:0.0015, density:0.0025 });
+  World.add(world, ball);
+  Body.setVelocity(ball, { x:(Math.random()-0.5)*3, y:1 });
+
+  const targetX = laneW*(targetIndex+0.5);
+  let settled = false;
+  const sparks = [];
+
+  function tick(){
+    Engine.update(engine, 1000/60);
+
+    if (ball.position.y > bumperZoneEnd){
+      const dx = targetX - ball.position.x;
+      Body.setVelocity(ball, { x: ball.velocity.x*0.8 + dx*0.05, y: Math.max(ball.velocity.y, 3) });
+    }
+    if (ball.position.y > H-46 && !settled){
+      settled = true;
+      Body.setPosition(ball, {x: targetX, y: H-46});
+      Body.setVelocity(ball, {x:0,y:0});
+      for (let i=0;i<24;i++){
+        sparks.push({
+          x: targetX, y: H-46,
+          vx:(Math.random()-0.5)*8, vy:(Math.random()-1.5)*8,
+          life:1, color: LANE_COLORS[targetIndex%LANE_COLORS.length]
+        });
+      }
+      finalize(gameId, targetIndex);
+    }
+
+    ctx.clearRect(0,0,W,H);
+    drawLanes(state.options, settled?targetIndex:-1);
+
+    ctx.save();
+    pegs.forEach(p=>{
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(47,249,255,.85)";
+      ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 10;
+      ctx.arc(p.position.x, p.position.y, 6, 0, Math.PI*2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.fillStyle = "#fff";
+    ctx.shadowColor = "#ffffff"; ctx.shadowBlur = 18;
+    ctx.arc(ball.position.x, ball.position.y, 9, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    for (let i=sparks.length-1;i>=0;i--){
+      const s = sparks[i];
+      s.x += s.vx; s.y += s.vy; s.vy += 0.3; s.life -= 0.03;
+      if (s.life <= 0){ sparks.splice(i,1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(s.life,0);
+      ctx.fillStyle = s.color;
+      ctx.shadowColor = s.color; ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 3, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (!settled || sparks.length) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>
