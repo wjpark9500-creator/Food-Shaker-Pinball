@@ -167,7 +167,8 @@
       <div id="waitingHint" class="hint" style="margin-top:10px;">모두 모이면 아무나 아래 버튼을 눌러 발사하세요. 한 번 발사하면 결과는 절대 바뀌지 않아요.</div>
     </div>
 
-    <canvas id="board" width="380" height="980"></canvas>
+    <div id="legendRow" style="display:flex; flex-wrap:wrap; gap:6px 10px; justify-content:center; margin-bottom:10px;"></div>
+    <canvas id="board" width="380" height="640"></canvas>
 
     <button class="launch-btn" id="launchBtn" type="button">🚀 발사!</button>
 
@@ -483,6 +484,8 @@ function applyRow(row){
   state.resultIndex = row.result_index;
   state.resultText = row.result_text;
 
+  renderLegend(row.options);
+
   const badge = document.getElementById("statusBadge");
   if (row.status === "collecting"){
     badge.textContent = "대기 중"; badge.className = "badge collecting";
@@ -490,7 +493,7 @@ function applyRow(row){
     badge.textContent = "발사됨!"; badge.className = "badge launched";
     document.getElementById("launchBtn").disabled = true;
     const who = row.launched_by ? `${row.launched_by}님이 발사했어요! ` : "";
-    document.getElementById("waitingHint").textContent = who + "공이 굴러가는 중... 결과를 지켜보세요!";
+    document.getElementById("waitingHint").textContent = who + "레이스가 진행 중... 결과를 지켜보세요!";
   } else if (row.status === "done"){
     badge.textContent = "결정 완료"; badge.className = "badge done";
     document.getElementById("launchBtn").style.display = "none";
@@ -508,6 +511,20 @@ function applyRow(row){
 
 function computeTargetIndex(seed, n){
   return Math.min(n-1, Math.floor(seed * n));
+}
+
+let legendRendered = null;
+function renderLegend(options){
+  if (!options || legendRendered === options.join("|")) return;
+  legendRendered = options.join("|");
+  const box = document.getElementById("legendRow");
+  if (!box) return;
+  box.innerHTML = options.map((opt,i)=>{
+    const color = LANE_COLORS[i % LANE_COLORS.length];
+    return `<span style="display:flex; align-items:center; gap:5px; font-size:12.5px; font-weight:700; padding:4px 10px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid ${color};">
+      <span style="width:10px;height:10px;border-radius:50%;background:${color};box-shadow:0 0 8px ${color};"></span>${opt}
+    </span>`;
+  }).join("");
 }
 
 async function launchBall(id){
@@ -568,7 +585,28 @@ function idleDraw(){
 function drawBoardStatic(){
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0,0,W,H);
-  drawLanes(state.options);
+  if (state.options && state.options.length){
+    const n = state.options.length;
+    const laneW = W / n;
+    for (let i=0;i<n;i++){
+      const x = laneW*(i+0.5);
+      const color = LANE_COLORS[i % LANE_COLORS.length];
+      ctx.save();
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.shadowColor = color; ctx.shadowBlur = 16;
+      ctx.arc(x, 60, 9, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,.25)";
+    ctx.setLineDash([6,6]);
+    ctx.beginPath();
+    ctx.moveTo(0, 85); ctx.lineTo(W, 85);
+    ctx.stroke();
+    ctx.restore();
+  }
   drawTitleZone();
 }
 
@@ -578,16 +616,17 @@ function drawTitleZone(){
   ctx.font = "700 15px Orbitron, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,.5)";
   ctx.textAlign = "center";
-  ctx.fillText(state.status==="collecting" ? "발사 대기 중..." : "", W/2, 40);
+  ctx.fillText(state.status==="collecting" ? "출발선에서 대기 중..." : "", W/2, 105);
   ctx.restore();
 }
 
-function drawLanes(options, highlight=-1){
+function drawLanes(options, highlight=-1, screenLaneTop=null){
   if (!options || !options.length) return;
   const W = canvas.width, H = canvas.height;
   const n = options.length;
   const laneW = W / n;
-  const laneTop = H - 90;
+  const laneTop = screenLaneTop === null ? H - 90 : screenLaneTop;
+  if (laneTop > H || laneTop < -90) return; // 화면 밖이면 그리지 않음
   for (let i=0;i<n;i++){
     const x = i*laneW;
     const color = LANE_COLORS[i % LANE_COLORS.length];
@@ -626,22 +665,25 @@ function wrapText(text, cx, cy, maxWidth, lineHeight){
 /* ====================== 핀볼 물리 시뮬레이션 ====================== */
 function startPinball(targetIndex){
   const { Engine, World, Bodies, Body, Events } = Matter;
-  const W = canvas.width, H = canvas.height;
+  const W = canvas.width, H = canvas.height; // 화면에 보이는 "뷰포트" 크기 (고정)
+  const VIRTUAL_H = 16000; // 실제 공이 떨어지는 가상 트랙 길이 (마블룰렛처럼 길게)
   const engine = Engine.create();
-  engine.gravity.y = 0.85; // 살짝 느리게 낙하 -> 더 오래 지켜보게
+  engine.gravity.y = 0.55;
   const world = engine.world;
 
-  const laneCount = state.options.length;
-  const laneW = W / laneCount;
-  const bumperZoneEnd = H - 190;
+  const options = state.options;
+  const n = options.length;
+  const laneW = W / n;
+  const bumperZoneEnd = VIRTUAL_H - 260;
+  const GOAL_Y = VIRTUAL_H - 46;
 
   World.add(world, [
-    Bodies.rectangle(-8, H/2, 16, H, {isStatic:true}),
-    Bodies.rectangle(W+8, H/2, 16, H, {isStatic:true}),
+    Bodies.rectangle(-8, VIRTUAL_H/2, 16, VIRTUAL_H, {isStatic:true}),
+    Bodies.rectangle(W+8, VIRTUAL_H/2, 16, VIRTUAL_H, {isStatic:true}),
   ]);
 
   const pegs = [];
-  const rows = 13; // 페그 줄 수를 늘려서 더 오래, 더 화려하게 튕기도록
+  const rows = 150; // 공이 여러 개라 개수를 살짝 줄여서 성능 여유 확보
   for (let r=0;r<rows;r++){
     const y = 80 + r*((bumperZoneEnd-140)/rows);
     const stagger = r % 2 === 0;
@@ -649,11 +691,10 @@ function startPinball(targetIndex){
     for (let c=0;c<cols;c++){
       const x = (stagger?30:60) + c*((W-60)/(cols-1));
       if (x < 15 || x > W-15) continue;
-      // 몇 줄마다 강하게 튕겨내는 "킥커" 장애물 배치 (박진감 포인트)
-      const isKicker = (r % 4 === 2) && (c === 1 || c === 4);
+      const isKicker = (r % 3 === 1) && (c === 1 || c === 4);
       const body = Bodies.circle(x, y, isKicker ? 11 : 6, {
         isStatic:true,
-        restitution: isKicker ? 1.05 : 0.75,
+        restitution: isKicker ? 1.05 : 0.8,
         friction:0.02,
         label: isKicker ? "kicker" : "peg"
       });
@@ -662,20 +703,31 @@ function startPinball(targetIndex){
   }
   World.add(world, pegs);
 
-  const ball = Bodies.circle(W/2 + (Math.random()-0.5)*50, 22, 9,
-    { restitution:0.62, friction:0.02, frictionAir:0.0009, density:0.0025, label:"ball" });
-  World.add(world, ball);
-  Body.setVelocity(ball, { x:(Math.random()-0.5)*3, y:1 });
+  // 메뉴 하나당 공 하나 - 출발선에 나란히 배치
+  const balls = options.map((opt, i)=>{
+    const startX = laneW*(i+0.5) + (Math.random()-0.5)*10;
+    const b = Bodies.circle(startX, 22 + (Math.random()*30), 9,
+      { restitution:0.66, friction:0.02, frictionAir:0.0006, density:0.0025, label:"ball" });
+    b.menuIndex = i;
+    b.finished = false;
+    b.kicksLeft = 8;
+    b.tensionZones = [0.08,0.18,0.28,0.38,0.48,0.58,0.68,0.78,0.88,0.95]
+      .map(frac=>({ y: bumperZoneEnd*frac, triggeredAt:null, done:false }));
+    Body.setVelocity(b, { x:(Math.random()-0.5)*3, y:1 });
+    return b;
+  });
+  World.add(world, balls);
 
-  let kicksLeft = 4; // 위로 강하게 튕기는 연출 최대 횟수 (무한루프 방지, 언젠간 반드시 정착)
   const flashes = [];
+  const sparks = [];
+  let winnerFinished = false;
 
   Events.on(engine, "collisionStart", (evt)=>{
     evt.pairs.forEach(pair=>{
-      const other = pair.bodyA.label === "ball" ? pair.bodyB
-        : (pair.bodyB.label === "ball" ? pair.bodyA : null);
-      if (!other || other.label !== "kicker" || kicksLeft <= 0) return;
-      kicksLeft--;
+      const ball = pair.bodyA.label === "ball" ? pair.bodyA : (pair.bodyB.label === "ball" ? pair.bodyB : null);
+      const other = ball === pair.bodyA ? pair.bodyB : pair.bodyA;
+      if (!ball || !other || other.label !== "kicker" || ball.kicksLeft <= 0) return;
+      ball.kicksLeft--;
       const upKick = 9 + Math.random()*4;
       const sideKick = (Math.random()-0.5)*6;
       Body.setVelocity(ball, { x: ball.velocity.x + sideKick, y: -upKick });
@@ -683,50 +735,106 @@ function startPinball(targetIndex){
     });
   });
 
-  const targetX = laneW*(targetIndex+0.5);
-  let settled = false;
-  let tensionStart = null; // 슬롯 근처에서 살짝 멈칫하는 긴장감 구간
-  const sparks = [];
+  const winnerBall = balls[targetIndex];
 
   function tick(){
     Engine.update(engine, 1000/60);
 
-    if (ball.position.y > bumperZoneEnd*0.72 && ball.position.y < bumperZoneEnd && tensionStart === null){
-      tensionStart = performance.now();
-    }
-    if (tensionStart !== null && performance.now() - tensionStart < 550){
-      Body.setVelocity(ball, { x: ball.velocity.x*0.9, y: ball.velocity.y*0.35 });
+    balls.forEach(b=>{
+      if (b.finished) return;
+      b.tensionZones.forEach(zone=>{
+        if (!zone.done && zone.triggeredAt === null && b.position.y > zone.y){
+          zone.triggeredAt = performance.now();
+        }
+        if (zone.triggeredAt !== null && !zone.done){
+          if (performance.now() - zone.triggeredAt < 500){
+            Body.setVelocity(b, { x: b.velocity.x*0.9, y: b.velocity.y*0.25 });
+          } else {
+            zone.done = true;
+          }
+        }
+      });
+    });
+
+    // 결승선 근처 보정: 사전에 확정된 우승자가 반드시(하지만 자연스럽게) 1등으로 통과하도록
+    if (!winnerFinished){
+      let leader = balls[0];
+      balls.forEach(b=>{ if (b.position.y > leader.position.y) leader = b; });
+
+      if (leader !== winnerBall && leader.position.y > bumperZoneEnd*0.7){
+        const progressFrac = Math.min(1, (leader.position.y - bumperZoneEnd*0.7) / (VIRTUAL_H - bumperZoneEnd*0.7));
+        // 우승자를 슬쩍 밀어주고, 현재 선두는 살짝 늦춤 (막판 역전 연출)
+        Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: winnerBall.velocity.y + 5*progressFrac });
+        Body.setVelocity(leader, { x: leader.velocity.x, y: leader.velocity.y * (1 - 0.12*progressFrac) });
+      }
+
+      // 확실한 안전장치: 우승자가 통과하기 전까지는 그 누구도 결승선을 통과할 수 없음
+      balls.forEach(b=>{
+        if (b !== winnerBall && b.position.y >= GOAL_Y){
+          Body.setPosition(b, { x: b.position.x, y: GOAL_Y - 2 });
+          Body.setVelocity(b, { x: b.velocity.x, y: Math.min(b.velocity.y, 2) });
+        }
+      });
+
+      if (winnerBall.position.y >= GOAL_Y){
+        winnerFinished = true;
+        winnerBall.finished = true;
+        Body.setPosition(winnerBall, { x: winnerBall.position.x, y: GOAL_Y });
+        Body.setVelocity(winnerBall, { x:0, y:0 });
+        for (let i=0;i<28;i++){
+          sparks.push({
+            x: winnerBall.position.x, y: GOAL_Y,
+            vx:(Math.random()-0.5)*9, vy:(Math.random()-1.5)*9,
+            life:1, color: LANE_COLORS[targetIndex%LANE_COLORS.length]
+          });
+        }
+        finalize(gameId, targetIndex);
+      }
     }
 
-    if (ball.position.y > bumperZoneEnd){
-      const dx = targetX - ball.position.x;
-      Body.setVelocity(ball, { x: ball.velocity.x*0.8 + dx*0.05, y: Math.max(ball.velocity.y, 3) });
-    }
-    if (ball.position.y > H-46 && !settled){
-      settled = true;
-      Body.setPosition(ball, {x: targetX, y: H-46});
-      Body.setVelocity(ball, {x:0,y:0});
-      for (let i=0;i<24;i++){
-        sparks.push({
-          x: targetX, y: H-46,
-          vx:(Math.random()-0.5)*8, vy:(Math.random()-1.5)*8,
-          life:1, color: LANE_COLORS[targetIndex%LANE_COLORS.length]
-        });
-      }
-      finalize(gameId, targetIndex);
-    }
+    // 카메라: 가장 앞서 있는 공을 화면 위쪽 40% 지점에 두고 트랙을 따라 스크롤
+    let frontY = 0;
+    balls.forEach(b=>{ if (b.position.y > frontY) frontY = b.position.y; });
+    const cameraY = Math.max(0, Math.min(VIRTUAL_H - H, frontY - H*0.4));
 
     ctx.clearRect(0,0,W,H);
-    drawLanes(state.options, settled?targetIndex:-1);
+
+    // 진행률 표시 (화면 고정)
+    const progress = Math.min(1, frontY / VIRTUAL_H);
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,.12)";
+    ctx.fillRect(0, 0, W, 5);
+    ctx.fillStyle = "#2ff9ff";
+    ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 8;
+    ctx.fillRect(0, 0, W*progress, 5);
+    ctx.restore();
+
+    // GOAL 라인 (화면에 보일 때만)
+    const goalScreenY = GOAL_Y - cameraY;
+    if (goalScreenY > -40 && goalScreenY < H+40){
+      ctx.save();
+      for (let x=0; x<W; x+=16){
+        ctx.fillStyle = (Math.floor(x/16)%2===0) ? "#fff" : "#111";
+        ctx.fillRect(x, goalScreenY, 16, 10);
+      }
+      ctx.fillStyle = "#fff";
+      ctx.font = "900 14px Orbitron, sans-serif";
+      ctx.textAlign = "center";
+      ctx.shadowColor = "#fff"; ctx.shadowBlur = 10;
+      ctx.fillText("GOAL", W/2, goalScreenY - 10);
+      ctx.restore();
+    }
 
     ctx.save();
     pegs.forEach(p=>{
+      const py = p.position.y - cameraY;
+      if (py < -20 || py > H+20) return;
       const isKicker = p.label === "kicker";
       ctx.beginPath();
-      ctx.fillStyle = isKicker ? "rgba(255,140,47,.95)" : "rgba(47,249,255,.85)";
+      ctx.fillStyle = isKicker ? "rgba(255,140,47,.95)" : "rgba(47,249,255,.55)";
       ctx.shadowColor = isKicker ? "#ff8c2f" : "#2ff9ff";
-      ctx.shadowBlur = isKicker ? 18 : 10;
-      ctx.arc(p.position.x, p.position.y, isKicker ? 11 : 6, 0, Math.PI*2);
+      ctx.shadowBlur = isKicker ? 18 : 8;
+      ctx.arc(p.position.x, py, isKicker ? 11 : 6, 0, Math.PI*2);
       ctx.fill();
     });
     ctx.restore();
@@ -735,23 +843,46 @@ function startPinball(targetIndex){
       const f = flashes[i];
       f.life -= 0.06;
       if (f.life <= 0){ flashes.splice(i,1); continue; }
+      const fy = f.y - cameraY;
       ctx.save();
       ctx.globalAlpha = Math.max(f.life,0);
       ctx.strokeStyle = "#ff8c2f";
       ctx.lineWidth = 3;
       ctx.shadowColor = "#ff8c2f"; ctx.shadowBlur = 20;
       ctx.beginPath();
-      ctx.arc(f.x, f.y, 11 + (1-f.life)*20, 0, Math.PI*2);
+      ctx.arc(f.x, fy, 11 + (1-f.life)*20, 0, Math.PI*2);
       ctx.stroke();
       ctx.restore();
     }
 
+    // 공들 그리기 (메뉴별 색상)
+    balls.forEach(b=>{
+      const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
+      ctx.save();
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.shadowColor = color; ctx.shadowBlur = 14;
+      ctx.arc(b.position.x, b.position.y - cameraY, 9, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    });
+
+    // 실시간 순위 표시 (화면 좌상단 고정)
+    const ranked = [...balls].sort((a,b)=>b.position.y - a.position.y);
     ctx.save();
-    ctx.beginPath();
-    ctx.fillStyle = "#fff";
-    ctx.shadowColor = "#ffffff"; ctx.shadowBlur = 18;
-    ctx.arc(ball.position.x, ball.position.y, 9, 0, Math.PI*2);
-    ctx.fill();
+    ctx.font = "700 11px 'Noto Sans KR', sans-serif";
+    ctx.textAlign = "left";
+    ranked.forEach((b,i)=>{
+      const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
+      const label = options[b.menuIndex].length > 6 ? options[b.menuIndex].slice(0,6)+"…" : options[b.menuIndex];
+      const y = 18 + i*15;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(10, y-4, 4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,.85)";
+      ctx.fillText(`${i+1}. ${label}`, 20, y);
+    });
     ctx.restore();
 
     for (let i=sparks.length-1;i>=0;i--){
@@ -763,12 +894,12 @@ function startPinball(targetIndex){
       ctx.fillStyle = s.color;
       ctx.shadowColor = s.color; ctx.shadowBlur = 10;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, 3, 0, Math.PI*2);
+      ctx.arc(s.x, s.y - cameraY, 3, 0, Math.PI*2);
       ctx.fill();
       ctx.restore();
     }
 
-    if (!settled || sparks.length || flashes.length) requestAnimationFrame(tick);
+    if (!winnerFinished || sparks.length || flashes.length) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 }
