@@ -163,6 +163,7 @@
     <div class="card" style="text-align:center;">
       <span class="badge collecting" id="statusBadge">대기 중</span>
       <div id="connBadge" style="font-size:11.5px; opacity:.7; margin-top:6px;">🟡 연결 중...</div>
+      <div id="presenceList" style="font-size:12px; opacity:.75; margin-top:6px;"></div>
       <div id="waitingHint" class="hint" style="margin-top:10px;">모두 모이면 아무나 아래 버튼을 눌러 발사하세요. 한 번 발사하면 결과는 절대 바뀌지 않아요.</div>
     </div>
 
@@ -343,9 +344,6 @@ function timeAgo(iso){
   return Math.floor(diff/86400) + "일 전";
 }
 
-boot();
-initSetupView();
-
 /* ====================== 설정 화면 (방 만들기) ====================== */
 function initSetupView(){
   const optList = document.getElementById("optList");
@@ -433,12 +431,21 @@ async function loadGame(id){
 
 function subscribeRealtime(id){
   const connBadge = document.getElementById("connBadge");
-  sb.channel("game-"+id)
-    .on("postgres_changes", { event:"UPDATE", schema:"public", table:"games", filter:`id=eq.${id}` },
-      (payload)=> applyRow(payload.new))
-    .subscribe((status)=>{
-      console.log("realtime status:", status);
-      if (!connBadge) return;
+  const presenceKey = getNickname() + "-" + Math.random().toString(36).slice(2,8);
+  const channel = sb.channel("game-"+id, {
+    config: { presence: { key: presenceKey } }
+  });
+
+  channel.on("postgres_changes", { event:"UPDATE", schema:"public", table:"games", filter:`id=eq.${id}` },
+    (payload)=> applyRow(payload.new));
+
+  channel.on("presence", { event:"sync" }, ()=>{
+    renderPresence(channel.presenceState());
+  });
+
+  channel.subscribe(async (status)=>{
+    console.log("realtime status:", status);
+    if (connBadge){
       if (status === "SUBSCRIBED"){
         connBadge.textContent = "🟢 실시간 연결됨";
         connBadge.style.color = "var(--neon-green)";
@@ -452,7 +459,21 @@ function subscribeRealtime(id){
         connBadge.textContent = "🟡 연결 중...";
         connBadge.style.color = "var(--neon-yellow)";
       }
-    });
+    }
+    if (status === "SUBSCRIBED"){
+      await channel.track({ nickname: getNickname(), joined_at: new Date().toISOString() });
+    }
+  });
+}
+
+function renderPresence(presenceState){
+  const box = document.getElementById("presenceList");
+  if (!box) return;
+  const names = [];
+  Object.values(presenceState).forEach(entries=>{
+    entries.forEach(p=> names.push(p.nickname || "익명"));
+  });
+  box.textContent = names.length ? `👀 지금 보고 있는 사람 (${names.length}): ${names.join(", ")}` : "";
 }
 
 function applyRow(row){
@@ -702,6 +723,10 @@ function startPinball(targetIndex){
   }
   requestAnimationFrame(tick);
 }
+
+/* ====================== 부팅: 모든 선언이 끝난 뒤 마지막에 실행 ====================== */
+boot();
+initSetupView();
 </script>
 </body>
 </html>
