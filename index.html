@@ -167,7 +167,7 @@
       <div id="waitingHint" class="hint" style="margin-top:10px;">모두 모이면 아무나 아래 버튼을 눌러 발사하세요. 한 번 발사하면 결과는 절대 바뀌지 않아요.</div>
     </div>
 
-    <canvas id="board" width="380" height="640"></canvas>
+    <canvas id="board" width="380" height="980"></canvas>
 
     <button class="launch-btn" id="launchBtn" type="button">🚀 발사!</button>
 
@@ -625,15 +625,15 @@ function wrapText(text, cx, cy, maxWidth, lineHeight){
 
 /* ====================== 핀볼 물리 시뮬레이션 ====================== */
 function startPinball(targetIndex){
-  const { Engine, World, Bodies, Body } = Matter;
+  const { Engine, World, Bodies, Body, Events } = Matter;
   const W = canvas.width, H = canvas.height;
   const engine = Engine.create();
-  engine.gravity.y = 1.1;
+  engine.gravity.y = 0.85; // 살짝 느리게 낙하 -> 더 오래 지켜보게
   const world = engine.world;
 
   const laneCount = state.options.length;
   const laneW = W / laneCount;
-  const bumperZoneEnd = H - 150;
+  const bumperZoneEnd = H - 190;
 
   World.add(world, [
     Bodies.rectangle(-8, H/2, 16, H, {isStatic:true}),
@@ -641,30 +641,62 @@ function startPinball(targetIndex){
   ]);
 
   const pegs = [];
-  const rows = 7;
+  const rows = 13; // 페그 줄 수를 늘려서 더 오래, 더 화려하게 튕기도록
   for (let r=0;r<rows;r++){
-    const y = 90 + r*((bumperZoneEnd-140)/rows);
+    const y = 80 + r*((bumperZoneEnd-140)/rows);
     const stagger = r % 2 === 0;
     const cols = 6;
     for (let c=0;c<cols;c++){
       const x = (stagger?30:60) + c*((W-60)/(cols-1));
       if (x < 15 || x > W-15) continue;
-      pegs.push(Bodies.circle(x,y,6,{isStatic:true, restitution:0.75, friction:0.02}));
+      // 몇 줄마다 강하게 튕겨내는 "킥커" 장애물 배치 (박진감 포인트)
+      const isKicker = (r % 4 === 2) && (c === 1 || c === 4);
+      const body = Bodies.circle(x, y, isKicker ? 11 : 6, {
+        isStatic:true,
+        restitution: isKicker ? 1.05 : 0.75,
+        friction:0.02,
+        label: isKicker ? "kicker" : "peg"
+      });
+      pegs.push(body);
     }
   }
   World.add(world, pegs);
 
   const ball = Bodies.circle(W/2 + (Math.random()-0.5)*50, 22, 9,
-    { restitution:0.5, friction:0.02, frictionAir:0.0015, density:0.0025 });
+    { restitution:0.62, friction:0.02, frictionAir:0.0009, density:0.0025, label:"ball" });
   World.add(world, ball);
   Body.setVelocity(ball, { x:(Math.random()-0.5)*3, y:1 });
 
+  let kicksLeft = 4; // 위로 강하게 튕기는 연출 최대 횟수 (무한루프 방지, 언젠간 반드시 정착)
+  const flashes = [];
+
+  Events.on(engine, "collisionStart", (evt)=>{
+    evt.pairs.forEach(pair=>{
+      const other = pair.bodyA.label === "ball" ? pair.bodyB
+        : (pair.bodyB.label === "ball" ? pair.bodyA : null);
+      if (!other || other.label !== "kicker" || kicksLeft <= 0) return;
+      kicksLeft--;
+      const upKick = 9 + Math.random()*4;
+      const sideKick = (Math.random()-0.5)*6;
+      Body.setVelocity(ball, { x: ball.velocity.x + sideKick, y: -upKick });
+      flashes.push({ x: other.position.x, y: other.position.y, life:1 });
+    });
+  });
+
   const targetX = laneW*(targetIndex+0.5);
   let settled = false;
+  let tensionStart = null; // 슬롯 근처에서 살짝 멈칫하는 긴장감 구간
   const sparks = [];
 
   function tick(){
     Engine.update(engine, 1000/60);
+
+    if (ball.position.y > bumperZoneEnd*0.72 && ball.position.y < bumperZoneEnd && tensionStart === null){
+      tensionStart = performance.now();
+    }
+    if (tensionStart !== null && performance.now() - tensionStart < 550){
+      Body.setVelocity(ball, { x: ball.velocity.x*0.9, y: ball.velocity.y*0.35 });
+    }
 
     if (ball.position.y > bumperZoneEnd){
       const dx = targetX - ball.position.x;
@@ -689,13 +721,30 @@ function startPinball(targetIndex){
 
     ctx.save();
     pegs.forEach(p=>{
+      const isKicker = p.label === "kicker";
       ctx.beginPath();
-      ctx.fillStyle = "rgba(47,249,255,.85)";
-      ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 10;
-      ctx.arc(p.position.x, p.position.y, 6, 0, Math.PI*2);
+      ctx.fillStyle = isKicker ? "rgba(255,140,47,.95)" : "rgba(47,249,255,.85)";
+      ctx.shadowColor = isKicker ? "#ff8c2f" : "#2ff9ff";
+      ctx.shadowBlur = isKicker ? 18 : 10;
+      ctx.arc(p.position.x, p.position.y, isKicker ? 11 : 6, 0, Math.PI*2);
       ctx.fill();
     });
     ctx.restore();
+
+    for (let i=flashes.length-1;i>=0;i--){
+      const f = flashes[i];
+      f.life -= 0.06;
+      if (f.life <= 0){ flashes.splice(i,1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(f.life,0);
+      ctx.strokeStyle = "#ff8c2f";
+      ctx.lineWidth = 3;
+      ctx.shadowColor = "#ff8c2f"; ctx.shadowBlur = 20;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, 11 + (1-f.life)*20, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     ctx.save();
     ctx.beginPath();
@@ -719,7 +768,7 @@ function startPinball(targetIndex){
       ctx.restore();
     }
 
-    if (!settled || sparks.length) requestAnimationFrame(tick);
+    if (!settled || sparks.length || flashes.length) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 }
