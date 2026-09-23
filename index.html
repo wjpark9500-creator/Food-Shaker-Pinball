@@ -749,8 +749,8 @@ function startPinball(targetIndex){
 
   // 트랙 중간중간, 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
   const narrowSpots = [
-    { y: bumperZoneEnd*0.35, halfW: 10, transition: 90, recenter: 600 },
-    { y: bumperZoneEnd*0.72, halfW: 10, transition: 90, recenter: 600 },
+    { y: bumperZoneEnd*0.35, halfW: 9.5, transition: 550, recenter: 900 },
+    { y: bumperZoneEnd*0.72, halfW: 9.5, transition: 550, recenter: 900 },
   ];
   function corridorCxAt(y){
     let cx = corridorCenterX(y);
