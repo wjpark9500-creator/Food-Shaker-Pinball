@@ -559,7 +559,7 @@ function applyRow(row){
   if (row.status === "launched" && !state.animationStarted){
     state.animationStarted = true;
     const target = computeTargetIndex(row.seed, row.options.length);
-    startPinball(target);
+    startPinball(target, row.physics_seed);
   }
   if (row.status === "done"){
     showResult(row);
@@ -587,18 +587,24 @@ function renderLegend(options){
 async function launchBall(id){
   const btn = document.getElementById("launchBtn");
   btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = "계산 중...";
   try {
     const arr = new Uint32Array(1);
     crypto.getRandomValues(arr);
     const seed = arr[0] / 4294967296;
+    const targetIndex = computeTargetIndex(seed, state.options.length);
+    // 이 targetIndex가 "몰래 개입" 없이 자연스럽게 이기는 물리 시드를 미리(화면에 보여주기 전에) 찾음
+    const physicsSeed = findPhysicsSeed(state.options, targetIndex, 500) ?? 1;
     const { error } = await sb.from("games")
-      .update({ status:"launched", seed, launched_at:new Date().toISOString(), launched_by:getNickname() })
+      .update({ status:"launched", seed, physics_seed: physicsSeed, launched_at:new Date().toISOString(), launched_by:getNickname() })
       .eq("id", id).eq("status","collecting");
     if (error) throw error;
   } catch (err) {
     console.error("발사 실패:", err);
     alert("발사 실패: " + (err && err.message ? err.message : String(err)));
     btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
 
@@ -720,45 +726,50 @@ function wrapText(text, cx, cy, maxWidth, lineHeight){
 }
 
 /* ====================== 핀볼 물리 시뮬레이션 ====================== */
-function startPinball(targetIndex){
+/* ====================== 시드 기반 결정론적 난수 (물리 시뮬레이션 재현용) ====================== */
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ====================== 레이스 물리 설정 (탐색용/시각화용 공통) ======================
+   같은 physicsSeed를 넣으면 항상 완전히 똑같은 레이스가 재현됩니다 (기기 상관없이 동일).
+   벽은 실제 물리 바디 대신, 매 프레임 공의 위치를 통로 경계 안으로 clamp하는 방식으로
+   처리합니다 - 훨씬 빠르고(수백 개의 벽 조각을 만들 필요가 없음), 벽을 뚫고 지나가는
+   터널링 걱정도 없고, 벽 두께가 통로를 잠식하는 문제도 원천적으로 없습니다. */
+function buildRace(options, physicsSeed){
+  const rng = mulberry32(physicsSeed);
   const { Engine, World, Bodies, Body, Events } = Matter;
-  const W = canvas.width, H = canvas.height; // 화면에 보이는 "뷰포트" 크기 (고정)
-  const VIRTUAL_H = 16000; // 실제 공이 떨어지는 가상 트랙 길이 (마블룰렛처럼 길게)
+  const W = 380, H = 640; // 화면에 보이는 "뷰포트" 크기 (고정)
+  const VIRTUAL_H = 16000; // 실제 공이 떨어지는 가상 트랙 길이
   const engine = Engine.create();
   engine.gravity.y = 0.55;
   const world = engine.world;
 
-  const options = state.options;
   const n = options.length;
-  const laneW = W / n;
   const bumperZoneEnd = VIRTUAL_H - 260;
   const GOAL_Y = VIRTUAL_H - 46;
 
-  World.add(world, [
-    Bodies.rectangle(-8, VIRTUAL_H/2, 16, VIRTUAL_H, {isStatic:true}),
-    Bodies.rectangle(W+8, VIRTUAL_H/2, 16, VIRTUAL_H, {isStatic:true}),
-  ]);
-
-  // 모래시계처럼 좌우로 꿈틀대며 이어지는 통로 - 페그/게이트 대신 이 통로만으로 낙하 경로를 만듦
-  const CORRIDOR_AMP = 60;      // 좌우로 흔들리는 폭 (더 완만하게)
-  const CORRIDOR_WAVELEN = 1100; // 한 번 좌->우->좌 왕복하는 데 걸리는 세로 길이 (더 완만하게)
-  const CORRIDOR_HALF_W = 95;   // 통로 절반 폭 (전체 폭 190 - 조금 더 넓게)
-  const CORRIDOR_STEP = 40;     // 벽을 몇 px 간격으로 근사할지
-  const CORRIDOR_PHASE = Math.random() * Math.PI * 2; // 매 발사마다 통로가 처음 굽이치는 방향을 랜덤화
+  const CORRIDOR_AMP = 60, CORRIDOR_WAVELEN = 1100, CORRIDOR_HALF_W = 95;
+  const CORRIDOR_PHASE = rng() * Math.PI * 2;
   const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2 + CORRIDOR_PHASE);
 
-  // 계속 떨어지기만 하는 게 아니라, 한쪽 끝(왼쪽/오른쪽)으로 천천히 쭉 미끄러져서
-  // 한동안 그대로 머무르는 구간 - 지그재그 낙하에 변화를 줌
+  // 한쪽 끝(왼쪽/오른쪽)으로 천천히 쭉 미끄러져서 한동안 머무르는 구간
   const sideSlideSpots = [
-    { y: bumperZoneEnd*0.16, targetX: CORRIDOR_HALF_W + 20, holdHalf: 260, approach: 520 },   // 왼쪽 끝으로
-    { y: bumperZoneEnd*0.58, targetX: W - CORRIDOR_HALF_W - 20, holdHalf: 260, approach: 520 }, // 오른쪽 끝으로
+    { y: bumperZoneEnd*0.16, targetX: CORRIDOR_HALF_W + 20, holdHalf: 260, approach: 520 },
+    { y: bumperZoneEnd*0.58, targetX: W - CORRIDOR_HALF_W - 20, holdHalf: 260, approach: 520 },
   ];
   function applySideSlide(y, cx){
     let result = cx;
     sideSlideSpots.forEach(spot=>{
       const dist = Math.abs(y - spot.y);
       if (dist <= spot.holdHalf){
-        result = spot.targetX; // 완전히 고정 - 옆으로 이동해서 머무는 구간
+        result = spot.targetX;
       } else if (dist < spot.holdHalf + spot.approach){
         const t = 1 - (dist - spot.holdHalf) / spot.approach;
         const smooth = t*t*(3-2*t);
@@ -768,7 +779,7 @@ function startPinball(targetIndex){
     return result;
   }
 
-  // 트랙 중간중간, 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
+  // 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
   const narrowSpots = [
     { y: bumperZoneEnd*0.35, halfW: 9.5, transition: 550, recenter: 900 },
     { y: bumperZoneEnd*0.72, halfW: 9.5, transition: 550, recenter: 900 },
@@ -777,22 +788,18 @@ function startPinball(targetIndex){
     let cx = corridorCenterX(y);
     narrowSpots.forEach(spot=>{
       const dist = Math.abs(y - spot.y);
-      // 1단계: 좁아지기 한참 전부터 미리, 부드럽게 화면 중앙으로 유도 (좌우 어느 쪽에 있었든
-      // 좁아지는 지점에 도착할 때는 이미 중앙에 있어야 양쪽이 대칭으로 가팔라짐)
       if (dist < spot.recenter){
         const t = 1 - dist/spot.recenter;
         const smooth = t*t*(3-2*t);
         cx = cx*(1-smooth) + (W/2)*smooth;
       }
     });
-    cx = applySideSlide(y, cx);
-    return cx;
+    return applySideSlide(y, cx);
   }
   function halfWidthAt(y){
     let hw = CORRIDOR_HALF_W;
     narrowSpots.forEach(spot=>{
       const dist = Math.abs(y - spot.y);
-      // 2단계: 이미 중앙에 정렬된 상태에서, 짧은 구간에 걸쳐 직선으로 확 좁힘 -> 좌우 대칭 모래시계 모양
       if (dist < spot.transition){
         const t = 1 - dist/spot.transition;
         hw = hw*(1-t) + spot.halfW*t;
@@ -801,37 +808,15 @@ function startPinball(targetIndex){
     return hw;
   }
 
+  // 그리기(미니맵/통로선) 전용 샘플 포인트 - 물리 충돌에는 관여하지 않음
   const leftPts = [], rightPts = [];
-  for (let y=40; y<=bumperZoneEnd; y+=CORRIDOR_STEP){
-    const cx = corridorCxAt(y);
-    const hw = halfWidthAt(y);
-    leftPts.push({ x: cx - hw, y });
-    rightPts.push({ x: cx + hw, y });
+  for (let y=40; y<=bumperZoneEnd; y+=40){
+    const cx = corridorCxAt(y), hw = halfWidthAt(y);
+    leftPts.push({ x: cx-hw, y });
+    rightPts.push({ x: cx+hw, y });
   }
-  const WALL_THICKNESS = 14;
-  function addWallChain(pts, boundarySide){ // boundarySide: -1 = 왼쪽 경계선, +1 = 오른쪽 경계선
-    for (let i=0;i<pts.length-1;i++){
-      const a = pts[i], b = pts[i+1];
-      const dx = b.x-a.x, dy = b.y-a.y;
-      const len = Math.sqrt(dx*dx+dy*dy);
-      const angle = Math.atan2(dy, dx);
-      // 벽을 두께의 절반만큼 바깥쪽으로 밀어서, 벽의 "중심"이 아니라 "안쪽 면"이 경계선에 오도록 함.
-      // 이렇게 안 하면 벽 두께의 절반이 통로 안쪽으로 파고들어서, 특히 좁은 구간에서
-      // 의도한 것보다 실제 빈 공간이 훨씬 좁아져(심하면 공보다도 좁아져) 버그가 생김
-      const nx = -dy/len, ny = dx/len; // y가 항상 증가하는 방향이라 이 법선은 항상 왼쪽을 향함
-      const off = -boundarySide * (WALL_THICKNESS/2);
-      const cx = (a.x+b.x)/2 + nx*off;
-      const cy = (a.y+b.y)/2 + ny*off;
-      const seg = Bodies.rectangle(cx, cy, len+6, WALL_THICKNESS, {
-        isStatic:true, angle, friction:0.04, restitution:0.03, label:"wall"
-      });
-      World.add(world, seg);
-    }
-  }
-  addWallChain(leftPts, -1);
-  addWallChain(rightPts, 1);
 
-  // 천천히 시계 방향으로 도는 풍차 장애물 - 통로 폭이 넓은 구간에 배치
+  // 천천히 시계 방향으로 도는 풍차 장애물 (실제 물리 바디로 존재 - 개수가 적어 가벼움)
   const windmillSpots = [0.20, 0.55, 0.87];
   const windmills = windmillSpots.map(frac=>{
     const wy = bumperZoneEnd*frac;
@@ -840,120 +825,132 @@ function startPinball(targetIndex){
     const barA = Bodies.rectangle(wx, wy, armLen, 10, {});
     const barB = Bodies.rectangle(wx, wy, 10, armLen, {});
     const windmill = Body.create({ parts:[barA, barB], isStatic:true, friction:0.05, restitution:0.4, label:"windmill" });
-    windmill.spinSpeed = 0.009; // 회전 속도 50% 증가
+    windmill.spinSpeed = 0.009;
     World.add(world, windmill);
     return windmill;
   });
 
-  // 메뉴 하나당 공 하나 - 출발선(통로 시작 위치)에 나란히 배치
-  // 어떤 메뉴가 어느 슬롯에서 출발할지는 매번 랜덤하게 섞음 (항상 같은 메뉴가
-  // 같은 자리에서 출발하면, 통로 방향에 따라 특정 메뉴가 매번 유리해 보일 수 있음)
+  // 메뉴 하나당 공 하나 - 출발 슬롯도 매번 랜덤(시드 기반)으로 섞음
   const slotOrder = options.map((_, i)=> i);
   for (let i=slotOrder.length-1; i>0; i--){
-    const j = Math.floor(Math.random()*(i+1));
+    const j = Math.floor(rng()*(i+1));
     [slotOrder[i], slotOrder[j]] = [slotOrder[j], slotOrder[i]];
   }
+  const BALL_R = 9;
   const balls = options.map((opt, i)=>{
     const slot = slotOrder[i];
     const startCx = corridorCxAt(50);
     const spread = Math.min(CORRIDOR_HALF_W*1.3, 12*n);
     const startX = startCx + (n<=1 ? 0 : (slot/(n-1) - 0.5) * spread);
-    const b = Bodies.circle(startX, 22 + (Math.random()*20), 9,
+    const b = Bodies.circle(startX, 22 + rng()*20, BALL_R,
       { restitution:0.05, friction:0.02, frictionAir:0.0006, density:0.0025, label:"ball" });
     b.menuIndex = i;
-    b.finished = false;
-    Body.setVelocity(b, { x:(Math.random()-0.5)*2, y:1 });
+    b.lastCheckY = b.position.y;
+    Body.setVelocity(b, { x:(rng()-0.5)*2, y:1 });
     return b;
   });
   World.add(world, balls);
 
+  // 공끼리 부딪힐 때 스파크가 튀는 위치 기록 (시각 효과 전용, 물리에는 영향 없음)
   const flashes = [];
-  const sparks = [];
-  let winnerFinished = false;
-
-  // 공끼리 부딪힐 때 반짝이는 스파크 연출
   Events.on(engine, "collisionStart", (evt)=>{
     evt.pairs.forEach(pair=>{
       if (pair.bodyA.label === "ball" && pair.bodyB.label === "ball"){
         flashes.push({
           x: (pair.bodyA.position.x+pair.bodyB.position.x)/2,
           y: (pair.bodyA.position.y+pair.bodyB.position.y)/2,
-          life:1
+          life: 1
         });
       }
     });
   });
 
-  const winnerBall = balls[targetIndex];
-  balls.forEach(b=>{ b.lastCheckY = b.position.y; });
   let frameCount = 0;
-
-  function tick(){
+  const MAX_FALL_SPEED = 13;
+  function stepOnce(){
     Engine.update(engine, 1000/60);
     frameCount++;
-
-    // 속도 상한: 오래 떨어져서 속도가 벽 두께보다 커지면 한 프레임에 벽을 통과해버릴 수 있어서
-    // (터널링) 최고 낙하 속도를 제한해둠
-    const MAX_FALL_SPEED = 13;
     balls.forEach(b=>{
-      if (!b.finished && b.velocity.y > MAX_FALL_SPEED){
+      if (b.velocity.y > MAX_FALL_SPEED){
         Body.setVelocity(b, { x: b.velocity.x, y: MAX_FALL_SPEED });
       }
+      // 통로 경계 clamp (analytic) - 실제 벽 바디 없이 통로 폭 안에 가둠
+      const cx = corridorCxAt(b.position.y);
+      const hw = halfWidthAt(b.position.y);
+      const left = cx - hw + BALL_R, right = cx + hw - BALL_R;
+      if (b.position.x < left){
+        Body.setPosition(b, { x:left, y:b.position.y });
+        if (b.velocity.x < 0) Body.setVelocity(b, { x:-b.velocity.x*0.15, y:b.velocity.y });
+      } else if (b.position.x > right){
+        Body.setPosition(b, { x:right, y:b.position.y });
+        if (b.velocity.x > 0) Body.setVelocity(b, { x:-b.velocity.x*0.15, y:b.velocity.y });
+      }
     });
-
     windmills.forEach(w=> Body.setAngle(w, w.angle + w.spinSpeed));
-
-    // 정체 방지: 좁은 게이트 위에 끼어서 안 내려가는 공은 주기적으로 확인해서 살짝 흔들어 탈출시킴
+    // 정체 방지: 좁은 구간에 끼어서 안 내려가는 공은 주기적으로 확인해서 살짝 흔들어 탈출시킴
     if (frameCount % 75 === 0){
       balls.forEach(b=>{
-        if (b.finished) return;
         if (Math.abs(b.position.y - b.lastCheckY) < 12){
-          Body.setVelocity(b, { x: b.velocity.x + (Math.random()-0.5)*10, y: Math.max(b.velocity.y, 4) });
+          Body.setVelocity(b, { x: b.velocity.x + (rng()-0.5)*10, y: Math.max(b.velocity.y, 4) });
         }
         b.lastCheckY = b.position.y;
       });
     }
+  }
 
-    // 결승선 보정: 사전에 확정된 우승자가 반드시 1등으로 통과하도록 하되,
-    // 트랙 절반 이상은 순수하게 자연스러운 혼돈에 맡겨서(누가 앞설지 진짜 모르게) 긴장감을 살리고,
-    // 후반부에만 부드럽게(스무스하게 강도가 올라가는 방식으로) 보정을 걸어 티가 안 나게 함
-    const CORRECTION_START = 0.48; // 이 지점 전까지는 그 누구도 보정 없음
-    if (!winnerFinished){
-      let leader = balls[0];
-      balls.forEach(b=>{ if (b.position.y > leader.position.y) leader = b; });
+  return { Body, balls, windmills, leftPts, rightPts, flashes,
+    GOAL_Y, VIRTUAL_H, bumperZoneEnd, CORRIDOR_HALF_W, W, H, stepOnce };
+}
 
-      if (leader !== winnerBall && leader.position.y > bumperZoneEnd*CORRECTION_START){
-        const gap = Math.max(0, leader.position.y - winnerBall.position.y);
-        const rawT = (leader.position.y/bumperZoneEnd - CORRECTION_START) / (1 - CORRECTION_START);
-        const t = Math.min(1, Math.max(0, rawT));
-        const smooth = t*t*(3-2*t); // 스무스스텝 - 갑자기 켜지지 않고 부드럽게 강해짐
-        const nudge = Math.min(gap * 0.02, 1.8) * smooth;
-        Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: winnerBall.velocity.y + nudge });
-        Body.setVelocity(leader, { x: leader.velocity.x, y: leader.velocity.y - nudge*0.5 });
+// 화면에 그리지 않고 빠르게 끝까지 돌려서, 어떤 공이 "자연스럽게" 결승선에 먼저 도착하는지 확인
+function simulateNaturalWinner(options, physicsSeed, maxSteps){
+  const race = buildRace(options, physicsSeed);
+  for (let i=0; i<maxSteps; i++){
+    race.stepOnce();
+    for (const b of race.balls){
+      if (b.position.y >= race.GOAL_Y) return b.menuIndex;
+    }
+  }
+  return null;
+}
+
+// targetIndex가 "몰래 개입" 없이 자연스럽게 이기는 물리 시드를 찾을 때까지 반복 시도
+// (보통 몇 번 안에 찾아지고, 화면에는 찾은 결과만 재생되므로 실시간 조작이 전혀 없음)
+function findPhysicsSeed(options, targetIndex, maxAttempts){
+  for (let attempt=1; attempt<=maxAttempts; attempt++){
+    const seed = (attempt * 2654435761) >>> 0;
+    const winner = simulateNaturalWinner(options, seed, 6000);
+    if (winner === targetIndex) return seed;
+  }
+  return null; // 극히 드문 실패 (통계적으로 거의 발생하지 않음)
+}
+
+/* ====================== 화면에 실제로 재생하는 부분 ====================== */
+function startPinball(targetIndex, physicsSeed){
+  const race = buildRace(state.options, physicsSeed);
+  const { Body, balls, windmills, leftPts, rightPts, flashes,
+    GOAL_Y, VIRTUAL_H, CORRIDOR_HALF_W, W, H } = race;
+  const options = state.options;
+  const winnerBall = balls[targetIndex];
+  const sparks = [];
+  let winnerFinished = false;
+
+  function tick(){
+    race.stepOnce();
+
+    // 우승자가 결승선에 도착했는지만 확인 - 다른 공을 밀거나 막는 개입은 전혀 없음
+    if (!winnerFinished && winnerBall.position.y >= GOAL_Y){
+      winnerFinished = true;
+      Body.setPosition(winnerBall, { x: winnerBall.position.x, y: GOAL_Y });
+      Body.setVelocity(winnerBall, { x:0, y:0 });
+      for (let i=0;i<28;i++){
+        sparks.push({
+          x: winnerBall.position.x, y: GOAL_Y,
+          vx:(Math.random()-0.5)*9, vy:(Math.random()-1.5)*9,
+          life:1, color: LANE_COLORS[targetIndex%LANE_COLORS.length]
+        });
       }
-
-      // 최후의 안전장치(거의 발동되지 않아야 정상): 우승자가 통과하기 전까진 아무도 통과 불가
-      balls.forEach(b=>{
-        if (b !== winnerBall && b.position.y >= GOAL_Y){
-          Body.setPosition(b, { x: b.position.x, y: GOAL_Y - 2 });
-          Body.setVelocity(b, { x: b.velocity.x, y: Math.min(b.velocity.y, 2) });
-        }
-      });
-
-      if (winnerBall.position.y >= GOAL_Y){
-        winnerFinished = true;
-        winnerBall.finished = true;
-        Body.setPosition(winnerBall, { x: winnerBall.position.x, y: GOAL_Y });
-        Body.setVelocity(winnerBall, { x:0, y:0 });
-        for (let i=0;i<28;i++){
-          sparks.push({
-            x: winnerBall.position.x, y: GOAL_Y,
-            vx:(Math.random()-0.5)*9, vy:(Math.random()-1.5)*9,
-            life:1, color: LANE_COLORS[targetIndex%LANE_COLORS.length]
-          });
-        }
-        finalize(gameId, targetIndex);
-      }
+      finalize(gameId, targetIndex);
     }
 
     // 카메라: 가장 앞서 있는 공을 화면 위쪽 40% 지점에 두고 트랙을 따라 스크롤
@@ -1111,7 +1108,6 @@ function startPinball(targetIndex){
       ctx.rect(mmX, mmY, mmW, mmH);
       ctx.clip();
 
-      // 통로 윤곽 (흐리게)
       ctx.strokeStyle = "rgba(47,249,255,.4)";
       ctx.lineWidth = 1;
       [leftPts, rightPts].forEach(pts=>{
@@ -1123,7 +1119,6 @@ function startPinball(targetIndex){
         ctx.stroke();
       });
 
-      // GOAL 라인
       const goalMy = mmY + GOAL_Y*scaleY;
       ctx.strokeStyle = "rgba(255,255,255,.7)";
       ctx.setLineDash([2,2]);
@@ -1132,14 +1127,12 @@ function startPinball(targetIndex){
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // 지금 화면(카메라)에 보이는 범위
       const viewTop = mmY + cameraY*scaleY;
       const viewH = Math.max(H*scaleY, 2);
       ctx.strokeStyle = "rgba(255,230,47,.9)";
       ctx.lineWidth = 1.3;
       ctx.strokeRect(mmX+1, viewTop, mmW-2, viewH);
 
-      // 공들 위치
       balls.forEach(b=>{
         const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
         const px = mmX + b.position.x*scaleX;
