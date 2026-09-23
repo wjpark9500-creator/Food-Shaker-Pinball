@@ -682,65 +682,46 @@ function startPinball(targetIndex){
     Bodies.rectangle(W+8, VIRTUAL_H/2, 16, VIRTUAL_H, {isStatic:true}),
   ]);
 
-  // 트랙 곳곳에 병목 게이트(좁은 통로) 배치 - 공들이 여기서 한꺼번에 몰려 부딪힘
-  const gateFracs = [0.14, 0.30, 0.46, 0.62, 0.78, 0.92];
-  const gateCenterFracs = [0.30, 0.68, 0.5, 0.35, 0.65, 0.5];
-  const GATE_GAP = 66;
-  const GATE_BAND = 34; // 게이트 주변 이 범위(y) 안쪽엔 페그를 안 깔아서 완전 막힘 방지
-  const gates = gateFracs.map((frac, gi)=>({
-    y: bumperZoneEnd*frac,
-    gapCenterX: W*gateCenterFracs[gi % gateCenterFracs.length]
-  }));
+  // 모래시계처럼 좌우로 꿈틀대며 이어지는 통로 - 페그/게이트 대신 이 통로만으로 낙하 경로를 만듦
+  const CORRIDOR_AMP = 90;      // 좌우로 흔들리는 폭
+  const CORRIDOR_WAVELEN = 820; // 한 번 좌->우->좌 왕복하는 데 걸리는 세로 길이
+  const CORRIDOR_HALF_W = 75;   // 통로 절반 폭 (전체 폭 150 - 공 여러 개가 부대끼기 딱 좋은 정도)
+  const CORRIDOR_STEP = 40;     // 벽을 몇 px 간격으로 근사할지
+  const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2);
 
-  const pegs = [];
-  const rows = 150; // 공이 여러 개라 개수를 살짝 줄여서 성능 여유 확보
-  const PEG_MARGIN = 16;
-  for (let r=0;r<rows;r++){
-    const y = 80 + r*((bumperZoneEnd-140)/rows);
-    if (gates.some(g=>Math.abs(y-g.y) < GATE_BAND)) continue; // 게이트 근처는 페그 제외
-    const stagger = r % 2 === 0;
-    const cols = 6;
-    const spacing = (W - PEG_MARGIN*2) / (cols-1);
-    for (let c=0;c<cols;c++){
-      let x = PEG_MARGIN + c*spacing + (stagger ? spacing*0.5 : 0);
-      // 지그재그 오프셋 때문에 화면 밖으로 밀려나는 페그는 버리지 않고 경계 안쪽으로 당겨서
-      // 오른쪽(또는 왼쪽) 벽을 따라 장애물이 하나도 없는 "뚫린 통로"가 생기지 않게 함
-      x = Math.max(PEG_MARGIN, Math.min(W - PEG_MARGIN, x));
-      const isKicker = (r % 3 === 1) && (c === 1 || c === 4);
-      const body = Bodies.circle(x, y, isKicker ? 11 : 6, {
-        isStatic:true,
-        restitution: isKicker ? 1.05 : 0.8,
-        friction:0.02,
-        label: isKicker ? "kicker" : "peg"
+  const leftPts = [], rightPts = [];
+  for (let y=40; y<=bumperZoneEnd; y+=CORRIDOR_STEP){
+    const cx = corridorCenterX(y);
+    leftPts.push({ x: cx - CORRIDOR_HALF_W, y });
+    rightPts.push({ x: cx + CORRIDOR_HALF_W, y });
+  }
+  function addWallChain(pts){
+    for (let i=0;i<pts.length-1;i++){
+      const a = pts[i], b = pts[i+1];
+      const dx = b.x-a.x, dy = b.y-a.y;
+      const len = Math.sqrt(dx*dx+dy*dy);
+      const angle = Math.atan2(dy, dx);
+      const seg = Bodies.rectangle((a.x+b.x)/2, (a.y+b.y)/2, len+6, 14, {
+        isStatic:true, angle, friction:0.015, restitution:0.55, label:"wall"
       });
-      pegs.push(body);
+      World.add(world, seg);
     }
   }
-  World.add(world, pegs);
+  addWallChain(leftPts);
+  addWallChain(rightPts);
 
-  gates.forEach(g=>{
-    const leftW = Math.max(0, g.gapCenterX - GATE_GAP/2);
-    const rightStart = g.gapCenterX + GATE_GAP/2;
-    const rightW = Math.max(0, W - rightStart);
-    if (leftW > 6){
-      World.add(world, Bodies.rectangle(leftW/2, g.y, leftW, 16, { isStatic:true, restitution:0.5, friction:0.02, label:"gate" }));
-    }
-    if (rightW > 6){
-      World.add(world, Bodies.rectangle(rightStart+rightW/2, g.y, rightW, 16, { isStatic:true, restitution:0.5, friction:0.02, label:"gate" }));
-    }
-  });
-
-  // 메뉴 하나당 공 하나 - 출발선에 나란히 배치
+  // 메뉴 하나당 공 하나 - 출발선(통로 시작 위치)에 나란히 배치
   const balls = options.map((opt, i)=>{
-    const startX = laneW*(i+0.5) + (Math.random()-0.5)*10;
-    const b = Bodies.circle(startX, 22 + (Math.random()*30), 9,
+    const startCx = corridorCenterX(50);
+    const spread = Math.min(CORRIDOR_HALF_W*1.3, 12*n);
+    const startX = startCx + (n<=1 ? 0 : (i/(n-1) - 0.5) * spread);
+    const b = Bodies.circle(startX, 22 + (Math.random()*20), 9,
       { restitution:0.66, friction:0.02, frictionAir:0.0006, density:0.0025, label:"ball" });
     b.menuIndex = i;
     b.finished = false;
-    b.kicksLeft = 8;
     b.tensionZones = [0.08,0.18,0.28,0.38,0.48,0.58,0.68,0.78,0.88,0.95]
       .map(frac=>({ y: bumperZoneEnd*frac, triggeredAt:null, done:false }));
-    Body.setVelocity(b, { x:(Math.random()-0.5)*3, y:1 });
+    Body.setVelocity(b, { x:(Math.random()-0.5)*2, y:1 });
     return b;
   });
   World.add(world, balls);
@@ -749,16 +730,16 @@ function startPinball(targetIndex){
   const sparks = [];
   let winnerFinished = false;
 
+  // 공끼리 부딪힐 때 반짝이는 스파크 연출
   Events.on(engine, "collisionStart", (evt)=>{
     evt.pairs.forEach(pair=>{
-      const ball = pair.bodyA.label === "ball" ? pair.bodyA : (pair.bodyB.label === "ball" ? pair.bodyB : null);
-      const other = ball === pair.bodyA ? pair.bodyB : pair.bodyA;
-      if (!ball || !other || other.label !== "kicker" || ball.kicksLeft <= 0) return;
-      ball.kicksLeft--;
-      const upKick = 9 + Math.random()*4;
-      const sideKick = (Math.random()-0.5)*6;
-      Body.setVelocity(ball, { x: ball.velocity.x + sideKick, y: -upKick });
-      flashes.push({ x: other.position.x, y: other.position.y, life:1 });
+      if (pair.bodyA.label === "ball" && pair.bodyB.label === "ball"){
+        flashes.push({
+          x: (pair.bodyA.position.x+pair.bodyB.position.x)/2,
+          y: (pair.bodyA.position.y+pair.bodyB.position.y)/2,
+          life:1
+        });
+      }
     });
   });
 
@@ -867,44 +848,35 @@ function startPinball(targetIndex){
     }
 
     ctx.save();
-    pegs.forEach(p=>{
-      const py = p.position.y - cameraY;
-      if (py < -20 || py > H+20) return;
-      const isKicker = p.label === "kicker";
+    ctx.strokeStyle = "rgba(47,249,255,.8)";
+    ctx.lineWidth = 5;
+    ctx.lineJoin = "round";
+    ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 16;
+    [leftPts, rightPts].forEach(pts=>{
       ctx.beginPath();
-      ctx.fillStyle = isKicker ? "rgba(255,140,47,.95)" : "rgba(47,249,255,.55)";
-      ctx.shadowColor = isKicker ? "#ff8c2f" : "#2ff9ff";
-      ctx.shadowBlur = isKicker ? 18 : 8;
-      ctx.arc(p.position.x, py, isKicker ? 11 : 6, 0, Math.PI*2);
-      ctx.fill();
-    });
-    ctx.restore();
-
-    ctx.save();
-    gates.forEach(g=>{
-      const gy = g.y - cameraY;
-      if (gy < -20 || gy > H+20) return;
-      const leftW = Math.max(0, g.gapCenterX - GATE_GAP/2);
-      const rightStart = g.gapCenterX + GATE_GAP/2;
-      ctx.fillStyle = "rgba(177,75,255,.85)";
-      ctx.shadowColor = "#b14bff"; ctx.shadowBlur = 14;
-      if (leftW > 0) ctx.fillRect(0, gy-8, leftW, 16);
-      if (W-rightStart > 0) ctx.fillRect(rightStart, gy-8, W-rightStart, 16);
+      let started = false;
+      pts.forEach(p=>{
+        const py = p.y - cameraY;
+        if (py < -60 || py > H+60) { started = false; return; }
+        if (!started){ ctx.moveTo(p.x, py); started = true; }
+        else ctx.lineTo(p.x, py);
+      });
+      ctx.stroke();
     });
     ctx.restore();
 
     for (let i=flashes.length-1;i>=0;i--){
       const f = flashes[i];
-      f.life -= 0.06;
+      f.life -= 0.07;
       if (f.life <= 0){ flashes.splice(i,1); continue; }
       const fy = f.y - cameraY;
       ctx.save();
       ctx.globalAlpha = Math.max(f.life,0);
-      ctx.strokeStyle = "#ff8c2f";
+      ctx.strokeStyle = "#ffe62f";
       ctx.lineWidth = 3;
-      ctx.shadowColor = "#ff8c2f"; ctx.shadowBlur = 20;
+      ctx.shadowColor = "#ffe62f"; ctx.shadowBlur = 18;
       ctx.beginPath();
-      ctx.arc(f.x, fy, 11 + (1-f.life)*20, 0, Math.PI*2);
+      ctx.arc(f.x, fy, 8 + (1-f.life)*16, 0, Math.PI*2);
       ctx.stroke();
       ctx.restore();
     }
