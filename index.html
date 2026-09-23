@@ -1069,6 +1069,68 @@ function startPinball(targetIndex){
       ctx.restore();
     }
 
+    // 우측 상단 미니맵: 전체 트랙 + 현재 화면 범위 + 공들 위치
+    (function drawMinimap(){
+      const mmW = 54, mmH = 150;
+      const mmX = W - mmW - 10, mmY = 10;
+      const scaleX = mmW / W, scaleY = mmH / VIRTUAL_H;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(6,3,15,.78)";
+      ctx.strokeStyle = "rgba(255,255,255,.28)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.roundRect(mmX, mmY, mmW, mmH, 7);
+      ctx.fill(); ctx.stroke();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(mmX, mmY, mmW, mmH);
+      ctx.clip();
+
+      // 통로 윤곽 (흐리게)
+      ctx.strokeStyle = "rgba(47,249,255,.4)";
+      ctx.lineWidth = 1;
+      [leftPts, rightPts].forEach(pts=>{
+        ctx.beginPath();
+        pts.forEach((p,i)=>{
+          const px = mmX + p.x*scaleX, py = mmY + p.y*scaleY;
+          if (i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+        });
+        ctx.stroke();
+      });
+
+      // GOAL 라인
+      const goalMy = mmY + GOAL_Y*scaleY;
+      ctx.strokeStyle = "rgba(255,255,255,.7)";
+      ctx.setLineDash([2,2]);
+      ctx.beginPath();
+      ctx.moveTo(mmX, goalMy); ctx.lineTo(mmX+mmW, goalMy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 지금 화면(카메라)에 보이는 범위
+      const viewTop = mmY + cameraY*scaleY;
+      const viewH = Math.max(H*scaleY, 2);
+      ctx.strokeStyle = "rgba(255,230,47,.9)";
+      ctx.lineWidth = 1.3;
+      ctx.strokeRect(mmX+1, viewTop, mmW-2, viewH);
+
+      // 공들 위치
+      balls.forEach(b=>{
+        const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
+        const px = mmX + b.position.x*scaleX;
+        const py = mmY + b.position.y*scaleY;
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.shadowColor = color; ctx.shadowBlur = 5;
+        ctx.arc(px, py, 2.4, 0, Math.PI*2);
+        ctx.fill();
+      });
+      ctx.restore();
+      ctx.restore();
+    })();
+
     if (!winnerFinished || sparks.length || flashes.length) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
