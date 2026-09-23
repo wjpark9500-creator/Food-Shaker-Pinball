@@ -691,16 +691,19 @@ function startPinball(targetIndex){
 
   // 트랙 중간중간, 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
   const narrowSpots = [
-    { y: bumperZoneEnd*0.35, halfW: 15, transition: 100 },
-    { y: bumperZoneEnd*0.72, halfW: 15, transition: 100 },
+    { y: bumperZoneEnd*0.35, halfW: 15, transition: 90, recenter: 600 },
+    { y: bumperZoneEnd*0.72, halfW: 15, transition: 90, recenter: 600 },
   ];
   function corridorCxAt(y){
     let cx = corridorCenterX(y);
     narrowSpots.forEach(spot=>{
       const dist = Math.abs(y - spot.y);
-      if (dist < spot.transition){
-        const t = 1 - dist/spot.transition; // 선형(직선) 보간 - 급격하고 가파른 깔때기
-        cx = cx*(1-t) + (W/2)*t; // 정중앙으로 잡아당김
+      // 1단계: 좁아지기 한참 전부터 미리, 부드럽게 화면 중앙으로 유도 (좌우 어느 쪽에 있었든
+      // 좁아지는 지점에 도착할 때는 이미 중앙에 있어야 양쪽이 대칭으로 가팔라짐)
+      if (dist < spot.recenter){
+        const t = 1 - dist/spot.recenter;
+        const smooth = t*t*(3-2*t);
+        cx = cx*(1-smooth) + (W/2)*smooth;
       }
     });
     return cx;
@@ -709,8 +712,9 @@ function startPinball(targetIndex){
     let hw = CORRIDOR_HALF_W;
     narrowSpots.forEach(spot=>{
       const dist = Math.abs(y - spot.y);
+      // 2단계: 이미 중앙에 정렬된 상태에서, 짧은 구간에 걸쳐 직선으로 확 좁힘 -> 좌우 대칭 모래시계 모양
       if (dist < spot.transition){
-        const t = 1 - dist/spot.transition; // 선형(직선) 보간
+        const t = 1 - dist/spot.transition;
         hw = hw*(1-t) + spot.halfW*t;
       }
     });
@@ -744,9 +748,9 @@ function startPinball(targetIndex){
   const windmills = windmillSpots.map(frac=>{
     const wy = bumperZoneEnd*frac;
     const wx = corridorCenterX(wy);
-    const armLen = CORRIDOR_HALF_W*2*0.85;
-    const barA = Bodies.rectangle(wx, wy, armLen, 12, {});
-    const barB = Bodies.rectangle(wx, wy, 12, armLen, {});
+    const armLen = CORRIDOR_HALF_W*2*0.85*0.8;
+    const barA = Bodies.rectangle(wx, wy, armLen, 10, {});
+    const barB = Bodies.rectangle(wx, wy, 10, armLen, {});
     const windmill = Body.create({ parts:[barA, barB], isStatic:true, friction:0.05, restitution:0.4, label:"windmill" });
     windmill.spinSpeed = 0.009; // 회전 속도 50% 증가
     World.add(world, windmill);
@@ -901,7 +905,7 @@ function startPinball(targetIndex){
     windmills.forEach(w=>{
       const wy = w.position.y - cameraY;
       if (wy < -60 || wy > H+60) return;
-      const armLen = CORRIDOR_HALF_W*2*0.85;
+      const armLen = CORRIDOR_HALF_W*2*0.85*0.8;
       ctx.save();
       ctx.translate(w.position.x, wy);
       ctx.rotate(w.angle);
