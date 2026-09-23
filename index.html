@@ -892,24 +892,24 @@ function startPinball(targetIndex){
       });
     }
 
-    // 결승선 근처 보정: 사전에 확정된 우승자가 반드시(하지만 자연스럽게) 1등으로 통과하도록
+    // 결승선 보정: 사전에 확정된 우승자가 반드시 1등으로 통과하도록 하되,
+    // 트랙 초반부터 아주 약하게, 계속 조금씩만 밀어줘서 "막판에 갑자기" 티가 안 나게 함
     if (!winnerFinished){
       let leader = balls[0];
       balls.forEach(b=>{ if (b.position.y > leader.position.y) leader = b; });
 
-      if (leader !== winnerBall && leader.position.y > bumperZoneEnd*0.7){
-        const progressFrac = Math.min(1, (leader.position.y - bumperZoneEnd*0.7) / (VIRTUAL_H - bumperZoneEnd*0.7));
-        // 우승자를 슬쩍 밀어주고, 현재 선두는 살짝 늦춤 (막판 역전 연출)
-        // 매 프레임 누적되지 않도록 "속도를 더하기"가 아니라 "최소 속도를 보장"하는 방식으로 캡을 씌움
-        const minWinnerSpeed = 4 + 6*progressFrac;
-        if (winnerBall.velocity.y < minWinnerSpeed){
-          Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: minWinnerSpeed });
-        }
-        const maxLeaderSpeed = leader.velocity.y * (1 - 0.06*progressFrac);
-        Body.setVelocity(leader, { x: leader.velocity.x, y: maxLeaderSpeed });
+      if (leader !== winnerBall && leader.position.y > bumperZoneEnd*0.05){
+        const gap = Math.max(0, leader.position.y - winnerBall.position.y);
+        const progressFrac = Math.min(1, leader.position.y / bumperZoneEnd);
+        // 한 번에 확 밀지 않고, 격차와 진행도에 비례해서 아주 조금씩만(프레임당 최대 0.9) 조정.
+        // 트랙 초반부터 시작해서 충분히 이른 시점에 자연스럽게 앞서가도록 하는 게 목표 -
+        // 그래야 결승선 직전 안전장치가 실제로는 거의 발동될 일이 없음
+        const nudge = Math.min(gap * 0.01, 0.9) * (0.5 + 0.5*progressFrac);
+        Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: winnerBall.velocity.y + nudge });
+        Body.setVelocity(leader, { x: leader.velocity.x, y: leader.velocity.y - nudge*0.5 });
       }
 
-      // 확실한 안전장치: 우승자가 통과하기 전까지는 그 누구도 결승선을 통과할 수 없음
+      // 최후의 안전장치(거의 발동되지 않아야 정상): 우승자가 통과하기 전까진 아무도 통과 불가
       balls.forEach(b=>{
         if (b !== winnerBall && b.position.y >= GOAL_Y){
           Body.setPosition(b, { x: b.position.x, y: GOAL_Y - 2 });
