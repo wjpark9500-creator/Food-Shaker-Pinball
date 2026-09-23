@@ -9,7 +9,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Noto+Sans+KR:wght@400;600;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 <style>
   :root{
     --bg-1:#0a0518; --bg-2:#160a2e; --neon-pink:#ff2fd0; --neon-cyan:#2ff9ff;
@@ -558,16 +557,11 @@ function applyRow(row){
 
   if (row.status === "launched" && !state.animationStarted){
     state.animationStarted = true;
-    const target = computeTargetIndex(row.seed, row.options.length);
-    startPinball(target, row.physics_seed);
+    startPinball(row.physics_seed);
   }
   if (row.status === "done"){
     showResult(row);
   }
-}
-
-function computeTargetIndex(seed, n){
-  return Math.min(n-1, Math.floor(seed * n));
 }
 
 let legendRendered = null;
@@ -587,24 +581,20 @@ function renderLegend(options){
 async function launchBall(id){
   const btn = document.getElementById("launchBtn");
   btn.disabled = true;
-  const originalText = btn.textContent;
-  btn.textContent = "계산 중...";
   try {
+    // 암호학적 난수로 "레이스 시드"만 뽑음. 승자는 미리 정하지 않고, 이 시드로 재생되는
+    // 레이스에서 실제로 먼저 골인한 공이 우승 (모든 기기에서 같은 레이스가 재생됨)
     const arr = new Uint32Array(1);
     crypto.getRandomValues(arr);
-    const seed = arr[0] / 4294967296;
-    const targetIndex = computeTargetIndex(seed, state.options.length);
-    // 이 targetIndex가 "몰래 개입" 없이 자연스럽게 이기는 물리 시드를 미리(화면에 보여주기 전에) 찾음
-    const physicsSeed = findPhysicsSeed(state.options, targetIndex, 500) ?? 1;
+    const raceSeed = arr[0];
     const { error } = await sb.from("games")
-      .update({ status:"launched", seed, physics_seed: physicsSeed, launched_at:new Date().toISOString(), launched_by:getNickname() })
+      .update({ status:"launched", physics_seed: raceSeed, launched_at:new Date().toISOString(), launched_by:getNickname() })
       .eq("id", id).eq("status","collecting");
     if (error) throw error;
   } catch (err) {
     console.error("발사 실패:", err);
     alert("발사 실패: " + (err && err.message ? err.message : String(err)));
     btn.disabled = false;
-    btn.textContent = originalText;
   }
 }
 
@@ -632,101 +622,20 @@ function showResult(row){
     <div>방 만든 사람</div><div>${row.created_by || "-"}</div>
     <div>발사한 사람</div><div>${row.launched_by || "-"}</div>
     <div>후보 목록</div><div>${row.options.join(", ")}</div>
-    <div>랜덤값(seed)</div><div>${row.seed}</div>
-    <div>계산식</div><div>floor(seed × ${row.options.length}) = ${row.result_index}</div>
+    <div>레이스 시드</div><div>${row.physics_seed}</div>
+    <div>결정 방식</div><div>위 시드로 재생한 레이스에서 가장 먼저 골인한 공</div>
     <div>확정 시각</div><div>${new Date(row.result_at).toLocaleString("ko-KR")}</div>
   `;
 }
 
-/* ====================== 캔버스 그리기 (대기 상태) ====================== */
-function idleDraw(){
-  if (!ctx) return;
-  drawBoardStatic();
-  if (state.status === "collecting") requestAnimationFrame(idleDraw);
-}
-
-function drawBoardStatic(){
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0,0,W,H);
-  if (state.options && state.options.length){
-    const n = state.options.length;
-    const laneW = W / n;
-    for (let i=0;i<n;i++){
-      const x = laneW*(i+0.5);
-      const color = LANE_COLORS[i % LANE_COLORS.length];
-      ctx.save();
-      ctx.beginPath();
-      ctx.fillStyle = color;
-      ctx.shadowColor = color; ctx.shadowBlur = 16;
-      ctx.arc(x, 60, 9, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,.25)";
-    ctx.setLineDash([6,6]);
-    ctx.beginPath();
-    ctx.moveTo(0, 85); ctx.lineTo(W, 85);
-    ctx.stroke();
-    ctx.restore();
-  }
-  drawTitleZone();
-}
-
-function drawTitleZone(){
-  const W = canvas.width;
-  ctx.save();
-  ctx.font = "700 15px Orbitron, sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,.5)";
-  ctx.textAlign = "center";
-  ctx.fillText(state.status==="collecting" ? "출발선에서 대기 중..." : "", W/2, 105);
-  ctx.restore();
-}
-
-function drawLanes(options, highlight=-1, screenLaneTop=null){
-  if (!options || !options.length) return;
-  const W = canvas.width, H = canvas.height;
-  const n = options.length;
-  const laneW = W / n;
-  const laneTop = screenLaneTop === null ? H - 90 : screenLaneTop;
-  if (laneTop > H || laneTop < -90) return; // 화면 밖이면 그리지 않음
-  for (let i=0;i<n;i++){
-    const x = i*laneW;
-    const color = LANE_COLORS[i % LANE_COLORS.length];
-    ctx.save();
-    ctx.fillStyle = i===highlight ? color : "rgba(255,255,255,.05)";
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = i===highlight ? 24 : 6;
-    ctx.beginPath();
-    ctx.roundRect(x+4, laneTop, laneW-8, 82, 10);
-    ctx.fill(); ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#fff";
-    ctx.font = "700 12px 'Noto Sans KR', sans-serif";
-    ctx.textAlign = "center";
-    wrapText(options[i], x+laneW/2, laneTop+46, laneW-14, 14);
-    ctx.restore();
-  }
-}
-
-function wrapText(text, cx, cy, maxWidth, lineHeight){
-  const words = text.split("");
-  let line = "", lines = [];
-  for (const ch of words){
-    const test = line + ch;
-    if (ctx.measureText(test).width > maxWidth && line){
-      lines.push(line); line = ch;
-    } else line = test;
-  }
-  lines.push(line);
-  const startY = cy - (lines.length-1)*lineHeight/2;
-  lines.forEach((l,i)=> ctx.fillText(l, cx, startY + i*lineHeight));
-}
-
-/* ====================== 핀볼 물리 시뮬레이션 ====================== */
-/* ====================== 시드 기반 결정론적 난수 (물리 시뮬레이션 재현용) ====================== */
+/* ====================== 레이스 물리 (모든 기기에서 비트 단위로 동일한 결과) ======================
+   - 시드 기반 난수(mulberry32) + 사칙연산/제곱근만 사용. Math.sin/cos/tan 같은 삼각함수는
+     브라우저마다 마지막 자리가 다를 수 있어서 시뮬레이션 안에서는 일절 쓰지 않음
+     (풍차 회전도 미리 계산한 회전값을 곱해서 돌림).
+   - 같은 시드면 아이폰/안드로이드/PC 어디서든 완전히 같은 레이스가 재생됨.
+   - 구조: [출발 방] → 튜브(폭 18 = 공 지름) → [풍차 방] → 튜브 → ... → [GOAL 방]
+     방은 화면 왼쪽 끝/오른쪽 끝에 번갈아 있고, 튜브가 그 사이를 대각선으로 가로지름.
+     튜브에서는 추월 불가, 방에서 풍차 날개에 걸리는 타이밍에 따라 순위가 뒤섞임. */
 function mulberry32(seed){
   let a = seed >>> 0;
   return function(){
@@ -736,175 +645,286 @@ function mulberry32(seed){
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// 사칙연산만으로 계산하는 cos/sin (|x| <= 1.6 범위, 테일러 급수) - 기기 간 결과 동일 보장
+function detCos(x){ const x2=x*x; let term=1, sum=1; for (let k=1;k<=10;k++){ term*=-x2/((2*k-1)*(2*k)); sum+=term; } return sum; }
+function detSin(x){ const x2=x*x; let term=x, sum=x; for (let k=1;k<=10;k++){ term*=-x2/((2*k)*(2*k+1)); sum+=term; } return sum; }
 
-/* ====================== 레이스 물리 설정 (탐색용/시각화용 공통) ======================
-   같은 physicsSeed를 넣으면 항상 완전히 똑같은 레이스가 재현됩니다 (기기 상관없이 동일).
-   벽은 실제 물리 바디 대신, 매 프레임 공의 위치를 통로 경계 안으로 clamp하는 방식으로
-   처리합니다 - 훨씬 빠르고(수백 개의 벽 조각을 만들 필요가 없음), 벽을 뚫고 지나가는
-   터널링 걱정도 없고, 벽 두께가 통로를 잠식하는 문제도 원천적으로 없습니다. */
-function buildRace(options, physicsSeed){
-  const rng = mulberry32(physicsSeed);
-  const { Engine, World, Bodies, Body, Events } = Matter;
-  const W = 380, H = 640; // 화면에 보이는 "뷰포트" 크기 (고정)
-  const VIRTUAL_H = 16000; // 실제 공이 떨어지는 가상 트랙 길이
-  const engine = Engine.create();
-  engine.gravity.y = 0.55;
-  const world = engine.world;
-
+function buildRace(options, raceSeed){
+  const rng = mulberry32(raceSeed);
+  const W = 380, H = 640;
   const n = options.length;
-  const bumperZoneEnd = VIRTUAL_H - 260;
-  const GOAL_Y = VIRTUAL_H - 46;
 
-  const CORRIDOR_AMP = 60, CORRIDOR_WAVELEN = 1100, CORRIDOR_HALF_W = 95;
-  const CORRIDOR_PHASE = rng() * Math.PI * 2;
-  const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2 + CORRIDOR_PHASE);
+  const BALL_R = 9;
+  const WALL_R = 8.5;            // 벽 충돌 반지름 (튜브 폭 18에 딱 맞되 끼지 않도록 0.5 여유)
+  const M = 14;                  // 화면 가장자리 여백
+  const CW = 150;                // 방 가로폭
+  const CH = 150;                // 방 높이(바깥벽 기준)
+  const SLOPE = 0.3249196962329063; // tan(18°) - 삼각함수 대신 상수로 고정
+  const TUBE = 18;               // 튜브 폭 (= 공 지름)
+  const OFF = TUBE * Math.sqrt(1 + SLOPE*SLOPE);
+  const STOP_IN = 40;            // 멈춤턱 위치 (바깥벽에서 안쪽으로)
+  const FLOOR_END_IN = 60;       // 튜브 바닥이 끝나는 위치 (멈춤턱과 20px 틈 → 공이 그 틈으로 떨어짐)
+  const WHEEL_R = 45;            // 풍차 날개 반지름
+  const WHEEL_CLEAR = WHEEL_R + 22; // 풍차 중심 ~ 모든 벽 최소 거리 (날개 끝과 벽 사이에 공이 끼지 않게)
+  const BLADE_HALF = 5;          // 날개 두께의 절반
+  const LEVELS = 13;             // 풍차 방 개수
 
-  // 한쪽 끝(왼쪽/오른쪽)으로 천천히 쭉 미끄러져서 한동안 머무르는 구간
-  const sideSlideSpots = [
-    { y: bumperZoneEnd*0.16, targetX: CORRIDOR_HALF_W + 20, holdHalf: 260, approach: 520 },
-    { y: bumperZoneEnd*0.58, targetX: W - CORRIDOR_HALF_W - 20, holdHalf: 260, approach: 520 },
-  ];
-  function applySideSlide(y, cx){
-    let result = cx;
-    sideSlideSpots.forEach(spot=>{
-      const dist = Math.abs(y - spot.y);
-      if (dist <= spot.holdHalf){
-        result = spot.targetX;
-      } else if (dist < spot.holdHalf + spot.approach){
-        const t = 1 - (dist - spot.holdHalf) / spot.approach;
-        const smooth = t*t*(3-2*t);
-        result = result*(1-smooth) + spot.targetX*smooth;
-      }
-    });
-    return result;
+  const GRAVITY = 0.1528;        // 프레임당 중력 가속도(px)
+  const AIR = 0.0008;            // 공기 저항
+  const RESTITUTION = 0.1;       // 거의 튕기지 않음
+  const MAX_SPEED = 11;
+  const SPIN = 0.009;            // 풍차 회전 속도(rad/frame), 시계 방향
+  const SPIN_C = detCos(SPIN), SPIN_S = detSin(SPIN);
+
+  const sideOf = j => (j % 2 === 0) ? -1 : 1;             // -1 왼쪽, +1 오른쪽
+  const outerX = j => sideOf(j) < 0 ? M : W - M;
+  const innerX = j => sideOf(j) < 0 ? M + CW : W - M - CW;
+  const inward = (j, d) => outerX(j) - sideOf(j)*d;
+  const dropX  = j => inward(j, FLOOR_END_IN);
+
+  const walls = [];
+  function addWall(ax, ay, bx, by){
+    const dx = bx-ax, dy = by-ay;
+    const len2 = dx*dx + dy*dy, len = Math.sqrt(len2);
+    walls.push({ ax, ay, bx, by, dx, dy, len2, nx: -dy/len, ny: dx/len,
+      minY: Math.min(ay,by), maxY: Math.max(ay,by) });
   }
 
-  // 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
-  const narrowSpots = [
-    { y: bumperZoneEnd*0.35, halfW: 9.5, transition: 550, recenter: 900 },
-    { y: bumperZoneEnd*0.72, halfW: 9.5, transition: 550, recenter: 900 },
-  ];
-  function corridorCxAt(y){
-    let cx = corridorCenterX(y);
-    narrowSpots.forEach(spot=>{
-      const dist = Math.abs(y - spot.y);
-      if (dist < spot.recenter){
-        const t = 1 - dist/spot.recenter;
-        const smooth = t*t*(3-2*t);
-        cx = cx*(1-smooth) + (W/2)*smooth;
-      }
-    });
-    return applySideSlide(y, cx);
-  }
-  function halfWidthAt(y){
-    let hw = CORRIDOR_HALF_W;
-    narrowSpots.forEach(spot=>{
-      const dist = Math.abs(y - spot.y);
-      if (dist < spot.transition){
-        const t = 1 - dist/spot.transition;
-        hw = hw*(1-t) + spot.halfW*t;
-      }
-    });
-    return hw;
-  }
+  const yF = [];
+  const floorY = (j, x) => yF[j] + SLOPE * Math.abs(x - outerX(j));
+  const ceilY  = (j, x) => floorY(j, x) - OFF;
+  yF[0] = 200;
+  for (let j=0; j<=LEVELS; j++) yF[j+1] = ceilY(j, outerX(j+1)) + CH;
 
-  // 그리기(미니맵/통로선) 전용 샘플 포인트 - 물리 충돌에는 관여하지 않음
-  const leftPts = [], rightPts = [];
-  for (let y=40; y<=bumperZoneEnd; y+=40){
-    const cx = corridorCxAt(y), hw = halfWidthAt(y);
-    leftPts.push({ x: cx-hw, y });
-    rightPts.push({ x: cx+hw, y });
-  }
+  // 출발 방
+  addWall(outerX(0), -200, outerX(0), yF[0]);
+  addWall(innerX(0), -200, innerX(0), ceilY(0, innerX(0)));
 
-  // 천천히 시계 방향으로 도는 풍차 장애물 (실제 물리 바디로 존재 - 개수가 적어 가벼움)
-  const windmillSpots = [0.20, 0.55, 0.87];
-  const windmills = windmillSpots.map(frac=>{
-    const wy = bumperZoneEnd*frac;
-    const wx = corridorCxAt(wy);
-    const armLen = CORRIDOR_HALF_W*2*0.85*0.8;
-    const barA = Bodies.rectangle(wx, wy, armLen, 10, {});
-    const barB = Bodies.rectangle(wx, wy, 10, armLen, {});
-    const windmill = Body.create({ parts:[barA, barB], isStatic:true, friction:0.05, restitution:0.4, label:"windmill" });
-    windmill.spinSpeed = 0.009;
-    World.add(world, windmill);
-    return windmill;
+  const rooms = [];
+  for (let j=0; j<=LEVELS; j++){
+    addWall(outerX(j), floorY(j, outerX(j)), dropX(j+1), floorY(j, dropX(j+1)));   // 튜브 바닥
+    addWall(innerX(j), ceilY(j, innerX(j)), outerX(j+1), ceilY(j, outerX(j+1)));   // 튜브 천장
+    const k = j + 1;
+    if (k <= LEVELS){
+      addWall(outerX(k), ceilY(j, outerX(k)), outerX(k), yF[k]);                   // 바깥벽
+      addWall(innerX(k), floorY(j, innerX(k)), innerX(k), ceilY(k, innerX(k)));    // 안쪽벽
+      const sx = inward(k, STOP_IN);
+      addWall(sx, ceilY(j, sx), sx, floorY(j, dropX(k)) + 6);                       // 멈춤턱
+      const fallX = inward(k, STOP_IN + 10);
+      rooms.push({ k, j, wx: fallX - sideOf(k)*(WHEEL_R - 14) });
+    }
+  }
+  // GOAL 방
+  const G = LEVELS + 1;
+  const goalTop = ceilY(LEVELS, outerX(G));
+  const goalBottom = goalTop + 300;
+  const GOAL_Y = goalTop + 130;
+  addWall(outerX(G), goalTop, outerX(G), goalBottom);
+  addWall(innerX(G), floorY(LEVELS, innerX(G)), innerX(G), goalBottom);
+  addWall(outerX(G), goalBottom, innerX(G), goalBottom);
+  const VIRTUAL_H = goalBottom + 40;
+
+  const BUCKET = 100, PAD = 30;
+  const buckets = new Map();
+  walls.forEach(w=>{
+    const b0 = Math.floor((w.minY - PAD)/BUCKET), b1 = Math.floor((w.maxY + PAD)/BUCKET);
+    for (let b=b0; b<=b1; b++){
+      if (!buckets.has(b)) buckets.set(b, []);
+      buckets.get(b).push(w);
+    }
   });
 
-  // 메뉴 하나당 공 하나 - 출발 슬롯도 매번 랜덤(시드 기반)으로 섞음
+  function distToWall(px, py, w){
+    let t = ((px-w.ax)*w.dx + (py-w.ay)*w.dy) / w.len2;
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    const qx = w.ax + t*w.dx - px, qy = w.ay + t*w.dy - py;
+    return Math.sqrt(qx*qx + qy*qy);
+  }
+  function minClear(px, py){
+    let m = Infinity;
+    for (const w of walls){
+      if (w.maxY < py - 300 || w.minY > py + 300) continue;
+      const d = distToWall(px, py, w);
+      if (d < m) m = d;
+    }
+    return m;
+  }
+
+  // 풍차: 모든 방에 하나씩, 위/아래 모든 벽에서 WHEEL_CLEAR 이상 떨어진 높이 범위의 한가운데
+  const windmills = rooms.map(r=>{
+    const yTop = floorY(r.j, r.wx), yBot = floorY(r.k, r.wx);
+    let lo = null, hi = null;
+    for (let y = yTop; y <= yBot; y += 1){
+      if (minClear(r.wx, y) >= WHEEL_CLEAR){ if (lo === null) lo = y; hi = y; }
+    }
+    if (lo === null) throw new Error("풍차 배치 공간 부족: 방 " + r.k);
+    const a0 = rng() * 1.5707963267948966;
+    return { position: { x: r.wx, y: (lo + hi)/2 }, c: detCos(a0), s: detSin(a0),
+      angle: a0, armLen: WHEEL_R*2, clearance: minClear(r.wx, (lo+hi)/2) };
+  });
+
+  // 출발 방에 공 배치 (어느 메뉴가 어느 자리에 서는지는 시드로 섞음 → 모든 메뉴의 우승 확률 동일)
+  const perRow = Math.min(n, 4);
   const slotOrder = options.map((_, i)=> i);
   for (let i=slotOrder.length-1; i>0; i--){
     const j = Math.floor(rng()*(i+1));
-    [slotOrder[i], slotOrder[j]] = [slotOrder[j], slotOrder[i]];
+    const tmp = slotOrder[i]; slotOrder[i] = slotOrder[j]; slotOrder[j] = tmp;
   }
-  const BALL_R = 9;
+  const colW = (CW - 2*BALL_R) / perRow;
   const balls = options.map((opt, i)=>{
     const slot = slotOrder[i];
-    const startCx = corridorCxAt(50);
-    const spread = Math.min(CORRIDOR_HALF_W*1.3, 12*n);
-    const startX = startCx + (n<=1 ? 0 : (slot/(n-1) - 0.5) * spread);
-    const b = Bodies.circle(startX, 22 + rng()*20, BALL_R,
-      { restitution:0.05, friction:0.02, frictionAir:0.0006, density:0.0025, label:"ball" });
-    b.menuIndex = i;
-    b.lastCheckY = b.position.y;
-    Body.setVelocity(b, { x:(rng()-0.5)*2, y:1 });
-    return b;
+    const col = slot % perRow, row = Math.floor(slot / perRow);
+    const x = outerX(0) + BALL_R + colW*(col + 0.5) + (rng()-0.5)*4;
+    const y = 40 + row*26 + rng()*6;
+    return { menuIndex: i, position: { x, y }, velocity: { x: 0, y: 0 },
+      prevX: x, prevY: y, stillX: x, stillY: y };
   });
-  World.add(world, balls);
 
-  // 공끼리 부딪힐 때 스파크가 튀는 위치 기록 (시각 효과 전용, 물리에는 영향 없음)
   const flashes = [];
-  Events.on(engine, "collisionStart", (evt)=>{
-    evt.pairs.forEach(pair=>{
-      if (pair.bodyA.label === "ball" && pair.bodyB.label === "ball"){
-        flashes.push({
-          x: (pair.bodyA.position.x+pair.bodyB.position.x)/2,
-          y: (pair.bodyA.position.y+pair.bodyB.position.y)/2,
-          life: 1
-        });
-      }
-    });
-  });
+  const touching = new Set();
 
-  let frameCount = 0;
-  const MAX_FALL_SPEED = 13;
-  function stepOnce(){
-    Engine.update(engine, 1000/60);
-    frameCount++;
-    balls.forEach(b=>{
-      if (b.velocity.y > MAX_FALL_SPEED){
-        Body.setVelocity(b, { x: b.velocity.x, y: MAX_FALL_SPEED });
+  function solveWalls(b){
+    const list = buckets.get(Math.floor(b.position.y / BUCKET));
+    if (!list) return;
+    for (const w of list){
+      const px = b.position.x, py = b.position.y;
+      const sPrev = (b.prevX - w.ax)*w.nx + (b.prevY - w.ay)*w.ny;
+      const s     = (px - w.ax)*w.nx + (py - w.ay)*w.ny;
+      const side  = sPrev !== 0 ? (sPrev > 0 ? 1 : -1) : (s >= 0 ? 1 : -1);
+      const t = ((px - w.ax)*w.dx + (py - w.ay)*w.dy) / w.len2;
+      let crossed = false;
+      if ((s > 0 ? 1 : -1) !== side && s !== 0){
+        const u = sPrev / (sPrev - s);
+        const ix = b.prevX + u*(px - b.prevX), iy = b.prevY + u*(py - b.prevY);
+        const ti = ((ix - w.ax)*w.dx + (iy - w.ay)*w.dy) / w.len2;
+        crossed = ti >= 0 && ti <= 1;
       }
-      // 통로 경계 clamp (analytic) - 실제 벽 바디 없이 통로 폭 안에 가둠
-      const cx = corridorCxAt(b.position.y);
-      const hw = halfWidthAt(b.position.y);
-      const left = cx - hw + BALL_R, right = cx + hw - BALL_R;
-      if (b.position.x < left){
-        Body.setPosition(b, { x:left, y:b.position.y });
-        if (b.velocity.x < 0) Body.setVelocity(b, { x:-b.velocity.x*0.15, y:b.velocity.y });
-      } else if (b.position.x > right){
-        Body.setPosition(b, { x:right, y:b.position.y });
-        if (b.velocity.x > 0) Body.setVelocity(b, { x:-b.velocity.x*0.15, y:b.velocity.y });
-      }
-    });
-    windmills.forEach(w=> Body.setAngle(w, w.angle + w.spinSpeed));
-    // 정체 방지: 좁은 구간에 끼어서 안 내려가는 공은 주기적으로 확인해서 살짝 흔들어 탈출시킴
-    if (frameCount % 75 === 0){
-      balls.forEach(b=>{
-        if (Math.abs(b.position.y - b.lastCheckY) < 12){
-          Body.setVelocity(b, { x: b.velocity.x + (rng()-0.5)*10, y: Math.max(b.velocity.y, 4) });
+      if (crossed || (t >= 0 && t <= 1 && side*s < WALL_R)){
+        const push = (WALL_R - side*s) * side;
+        b.position.x = px + w.nx*push; b.position.y = py + w.ny*push;
+        const vn = (b.velocity.x*w.nx + b.velocity.y*w.ny) * side;
+        if (vn < 0){
+          const k = (1 + RESTITUTION) * vn * side;
+          b.velocity.x -= k*w.nx; b.velocity.y -= k*w.ny;
         }
-        b.lastCheckY = b.position.y;
+      } else if (t < 0 || t > 1){
+        const ex = t < 0 ? w.ax : w.bx, ey = t < 0 ? w.ay : w.by;
+        const vx = px - ex, vy = py - ey;
+        const d = Math.sqrt(vx*vx + vy*vy);
+        if (d > 0 && d < WALL_R){
+          const ux = vx/d, uy = vy/d;
+          b.position.x = ex + ux*WALL_R; b.position.y = ey + uy*WALL_R;
+          const vn = b.velocity.x*ux + b.velocity.y*uy;
+          if (vn < 0){
+            const k = (1 + RESTITUTION) * vn;
+            b.velocity.x -= k*ux; b.velocity.y -= k*uy;
+          }
+        }
+      }
+    }
+  }
+
+  function solveWindmill(b, wm){
+    const cx = wm.position.x, cy = wm.position.y;
+    const rx = b.position.x - cx, ry = b.position.y - cy;
+    if (rx*rx + ry*ry > (WHEEL_R + BALL_R + BLADE_HALF + 2)*(WHEEL_R + BALL_R + BLADE_HALF + 2)) return;
+    const R = BALL_R + BLADE_HALF;
+    const dirs = [[wm.c, wm.s], [-wm.s, wm.c]];
+    for (const [dx, dy] of dirs){
+      let t = rx*dx + ry*dy;
+      t = t < -WHEEL_R ? -WHEEL_R : (t > WHEEL_R ? WHEEL_R : t);
+      const qx = rx - t*dx, qy = ry - t*dy;
+      const d = Math.sqrt(qx*qx + qy*qy);
+      if (d > 0 && d < R){
+        const ux = qx/d, uy = qy/d;
+        b.position.x += ux*(R - d); b.position.y += uy*(R - d);
+        // 날개 표면 속도(회전)를 고려한 상대 속도로 충돌 처리
+        const sx = -SPIN*(t*dy), sy = SPIN*(t*dx);
+        const vn = (b.velocity.x - sx)*ux + (b.velocity.y - sy)*uy;
+        if (vn < 0){
+          const k = (1 + RESTITUTION) * vn;
+          b.velocity.x -= k*ux; b.velocity.y -= k*uy;
+        }
+      }
+    }
+  }
+
+  function solveBalls(){
+    for (let i=0; i<balls.length; i++){
+      for (let j=i+1; j<balls.length; j++){
+        const a = balls[i], c = balls[j];
+        const dx = c.position.x - a.position.x, dy = c.position.y - a.position.y;
+        const d2 = dx*dx + dy*dy, min = 2*BALL_R;
+        const key = i*16 + j;
+        if (d2 < min*min && d2 > 0){
+          const d = Math.sqrt(d2), ux = dx/d, uy = dy/d, pen = (min - d)/2;
+          a.position.x -= ux*pen; a.position.y -= uy*pen;
+          c.position.x += ux*pen; c.position.y += uy*pen;
+          const vn = (c.velocity.x - a.velocity.x)*ux + (c.velocity.y - a.velocity.y)*uy;
+          if (vn < 0){
+            const k = (1 + RESTITUTION) * vn / 2;
+            a.velocity.x += k*ux; a.velocity.y += k*uy;
+            c.velocity.x -= k*ux; c.velocity.y -= k*uy;
+          }
+          if (!touching.has(key)){
+            touching.add(key);
+            if (vn < -1) flashes.push({ x: a.position.x + dx/2, y: a.position.y + dy/2, life: 1 });
+          }
+        } else {
+          touching.delete(key);
+        }
+      }
+    }
+  }
+
+  let frameCount = 0, nudges = 0;
+  function stepOnce(){
+    frameCount++;
+    // 풍차 회전 (미리 계산한 회전값을 곱함 + 길이 보정)
+    windmills.forEach(w=>{
+      const c = w.c*SPIN_C - w.s*SPIN_S, s = w.s*SPIN_C + w.c*SPIN_S;
+      const len = Math.sqrt(c*c + s*s);
+      w.c = c/len; w.s = s/len; w.angle += SPIN;
+    });
+    balls.forEach(b=>{
+      b.prevX = b.position.x; b.prevY = b.position.y;
+      b.velocity.x *= (1 - AIR);
+      b.velocity.y = b.velocity.y*(1 - AIR) + GRAVITY;
+      const sp2 = b.velocity.x*b.velocity.x + b.velocity.y*b.velocity.y;
+      if (sp2 > MAX_SPEED*MAX_SPEED){
+        const k = MAX_SPEED / Math.sqrt(sp2);
+        b.velocity.x *= k; b.velocity.y *= k;
+      }
+      b.position.x += b.velocity.x; b.position.y += b.velocity.y;
+    });
+    for (let iter=0; iter<3; iter++){
+      solveBalls();
+      balls.forEach(b=>{
+        windmills.forEach(w=> solveWindmill(b, w));
+        solveWalls(b);
+      });
+    }
+    // 정체 방지(최후의 안전장치): 2초 동안 거의 안 움직인 공만 아주 살짝 흔듦
+    if (frameCount % 120 === 0){
+      balls.forEach(b=>{
+        if (b.position.y >= GOAL_Y) return;
+        const dx = b.position.x - b.stillX, dy = b.position.y - b.stillY;
+        if (dx*dx + dy*dy < 4){
+          b.velocity.x += (rng()-0.5)*3; b.velocity.y += 1.5;
+          nudges++;
+        }
+        b.stillX = b.position.x; b.stillY = b.position.y;
       });
     }
   }
 
-  return { Body, balls, windmills, leftPts, rightPts, flashes,
-    GOAL_Y, VIRTUAL_H, bumperZoneEnd, CORRIDOR_HALF_W, W, H, stepOnce };
+  return { balls, windmills, walls, flashes, GOAL_Y, VIRTUAL_H, W, H,
+    stepOnce, getNudges: ()=>nudges };
 }
 
-// 화면에 그리지 않고 빠르게 끝까지 돌려서, 어떤 공이 "자연스럽게" 결승선에 먼저 도착하는지 확인
-function simulateNaturalWinner(options, physicsSeed, maxSteps){
-  const race = buildRace(options, physicsSeed);
+// 화면에 그리지 않고 끝까지 돌려서 누가 먼저 골인하는지 (공정성 검증 재현용)
+function simulateWinner(options, raceSeed, maxSteps){
+  const race = buildRace(options, raceSeed);
   for (let i=0; i<maxSteps; i++){
     race.stepOnce();
     for (const b of race.balls){
@@ -914,240 +934,245 @@ function simulateNaturalWinner(options, physicsSeed, maxSteps){
   return null;
 }
 
-// targetIndex가 "몰래 개입" 없이 자연스럽게 이기는 물리 시드를 찾을 때까지 반복 시도
-// (보통 몇 번 안에 찾아지고, 화면에는 찾은 결과만 재생되므로 실시간 조작이 전혀 없음)
-function findPhysicsSeed(options, targetIndex, maxAttempts){
-  for (let attempt=1; attempt<=maxAttempts; attempt++){
-    const seed = (attempt * 2654435761) >>> 0;
-    const winner = simulateNaturalWinner(options, seed, 6000);
-    if (winner === targetIndex) return seed;
+/* ====================== 캔버스 그리기 ====================== */
+let previewRace = null, previewKey = null;
+function idleDraw(){
+  if (!ctx) return;
+  if (state.options && state.options.length){
+    const key = state.options.join("|");
+    if (previewKey !== key){ previewRace = buildRace(state.options, 1); previewKey = key; }
+    renderFrame(previewRace, 0, [], true);
   }
-  return null; // 극히 드문 실패 (통계적으로 거의 발생하지 않음)
+  if (state.status === "collecting") requestAnimationFrame(idleDraw);
 }
 
-/* ====================== 화면에 실제로 재생하는 부분 ====================== */
-function startPinball(targetIndex, physicsSeed){
-  const race = buildRace(state.options, physicsSeed);
-  const { Body, balls, windmills, leftPts, rightPts, flashes,
-    GOAL_Y, VIRTUAL_H, CORRIDOR_HALF_W, W, H } = race;
+function renderFrame(race, cameraY, sparks, isPreview){
+  const { balls, windmills, walls, flashes, GOAL_Y, VIRTUAL_H, W, H } = race;
   const options = state.options;
-  const winnerBall = balls[targetIndex];
+  ctx.clearRect(0,0,W,H);
+
+  let frontY = 0;
+  balls.forEach(b=>{ if (b.position.y > frontY) frontY = b.position.y; });
+
+  // 진행률 바
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,.12)";
+  ctx.fillRect(0, 0, W, 5);
+  ctx.fillStyle = "#2ff9ff";
+  ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 8;
+  ctx.fillRect(0, 0, W*Math.min(1, frontY/GOAL_Y), 5);
+  ctx.restore();
+
+  // GOAL 라인
+  const goalScreenY = GOAL_Y - cameraY;
+  if (goalScreenY > -40 && goalScreenY < H+40){
+    ctx.save();
+    for (let x=0; x<W; x+=16){
+      ctx.fillStyle = (Math.floor(x/16)%2===0) ? "#fff" : "#111";
+      ctx.fillRect(x, goalScreenY, 16, 10);
+    }
+    ctx.fillStyle = "#fff";
+    ctx.font = "900 14px Orbitron, sans-serif";
+    ctx.textAlign = "center";
+    ctx.shadowColor = "#fff"; ctx.shadowBlur = 10;
+    ctx.fillText("GOAL", W/2, goalScreenY - 10);
+    ctx.restore();
+  }
+
+  // 벽 (튜브/방)
+  ctx.save();
+  ctx.strokeStyle = "rgba(47,249,255,.85)";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 14;
+  ctx.beginPath();
+  walls.forEach(w=>{
+    if (w.maxY - cameraY < -20 || w.minY - cameraY > H+20) return;
+    ctx.moveTo(w.ax, w.ay - cameraY);
+    ctx.lineTo(w.bx, w.by - cameraY);
+  });
+  ctx.stroke();
+  ctx.restore();
+
+  // 풍차
+  ctx.save();
+  windmills.forEach(w=>{
+    const wy = w.position.y - cameraY;
+    if (wy < -60 || wy > H+60) return;
+    const L = w.armLen/2;
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,230,47,.9)";
+    ctx.lineWidth = 10;
+    ctx.lineCap = "round";
+    ctx.shadowColor = "#ffe62f"; ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.moveTo(w.position.x - w.c*L, wy - w.s*L); ctx.lineTo(w.position.x + w.c*L, wy + w.s*L);
+    ctx.moveTo(w.position.x + w.s*L, wy - w.c*L); ctx.lineTo(w.position.x - w.s*L, wy + w.c*L);
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(w.position.x, wy, 7, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+  ctx.restore();
+
+  // 공끼리 부딪힐 때 스파크
+  for (let i=flashes.length-1;i>=0;i--){
+    const f = flashes[i];
+    f.life -= 0.07;
+    if (f.life <= 0){ flashes.splice(i,1); continue; }
+    ctx.save();
+    ctx.globalAlpha = Math.max(f.life,0);
+    ctx.strokeStyle = "#ffe62f";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#ffe62f"; ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y - cameraY, 8 + (1-f.life)*16, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 공
+  balls.forEach(b=>{
+    const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
+    ctx.save();
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.shadowColor = color; ctx.shadowBlur = 14;
+    ctx.arc(b.position.x, b.position.y - cameraY, 9, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  if (isPreview){
+    ctx.save();
+    ctx.font = "700 15px Orbitron, sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,.55)";
+    ctx.textAlign = "center";
+    ctx.fillText("출발 대기 중...", W/2 + 60, 60);
+    ctx.restore();
+    return;
+  }
+
+  // 실시간 순위 (좌상단)
+  const ranked = [...balls].sort((a,b)=>b.position.y - a.position.y);
+  ctx.save();
+  ctx.font = "700 11px 'Noto Sans KR', sans-serif";
+  ctx.textAlign = "left";
+  ranked.forEach((b,i)=>{
+    const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
+    const name = options[b.menuIndex];
+    const label = name.length > 6 ? name.slice(0,6)+"…" : name;
+    const y = 18 + i*15;
+    ctx.fillStyle = "rgba(6,3,15,.6)";
+    ctx.fillRect(4, y-11, 92, 14);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(10, y-4, 4, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.9)";
+    ctx.fillText(`${i+1}. ${label}`, 20, y);
+  });
+  ctx.restore();
+
+  // 우승 스파크
+  for (let i=sparks.length-1;i>=0;i--){
+    const s = sparks[i];
+    s.x += s.vx; s.y += s.vy; s.vy += 0.3; s.life -= 0.03;
+    if (s.life <= 0){ sparks.splice(i,1); continue; }
+    ctx.save();
+    ctx.globalAlpha = Math.max(s.life,0);
+    ctx.fillStyle = s.color;
+    ctx.shadowColor = s.color; ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y - cameraY, 3, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 우측 상단 미니맵
+  const mmW = 54, mmH = 150;
+  const mmX = W - mmW - 10, mmY = 10;
+  const scaleX = mmW / W, scaleY = mmH / VIRTUAL_H;
+  ctx.save();
+  ctx.fillStyle = "rgba(6,3,15,.78)";
+  ctx.strokeStyle = "rgba(255,255,255,.28)";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.roundRect(mmX, mmY, mmW, mmH, 7);
+  ctx.fill(); ctx.stroke();
+  ctx.beginPath();
+  ctx.rect(mmX, mmY, mmW, mmH);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(47,249,255,.4)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  walls.forEach(w=>{
+    ctx.moveTo(mmX + w.ax*scaleX, mmY + w.ay*scaleY);
+    ctx.lineTo(mmX + w.bx*scaleX, mmY + w.by*scaleY);
+  });
+  ctx.stroke();
+  const goalMy = mmY + GOAL_Y*scaleY;
+  ctx.strokeStyle = "rgba(255,255,255,.7)";
+  ctx.setLineDash([2,2]);
+  ctx.beginPath();
+  ctx.moveTo(mmX, goalMy); ctx.lineTo(mmX+mmW, goalMy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = "rgba(255,230,47,.9)";
+  ctx.lineWidth = 1.3;
+  ctx.strokeRect(mmX+1, mmY + cameraY*scaleY, mmW-2, Math.max(H*scaleY, 2));
+  balls.forEach(b=>{
+    const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.shadowColor = color; ctx.shadowBlur = 5;
+    ctx.arc(mmX + b.position.x*scaleX, mmY + b.position.y*scaleY, 2.4, 0, Math.PI*2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+/* ====================== 레이스 재생 ======================
+   모든 기기가 같은 레이스 시드로 똑같은 레이스를 재생하고, 실제로 먼저 골인한 공이 우승.
+   화면 주사율(60Hz/120Hz)과 상관없이 같은 속도로 진행되도록 고정 간격(1/60초)으로 계산함 */
+function startPinball(raceSeed){
+  const race = buildRace(state.options, raceSeed);
+  const { balls, GOAL_Y, VIRTUAL_H, H } = race;
   const sparks = [];
-  let winnerFinished = false;
+  let winner = null;
+  let last = performance.now(), acc = 0;
+  const STEP_MS = 1000/60;
 
-  function tick(){
-    race.stepOnce();
-
-    // 우승자가 결승선에 도착했는지만 확인 - 다른 공을 밀거나 막는 개입은 전혀 없음
-    if (!winnerFinished && winnerBall.position.y >= GOAL_Y){
-      winnerFinished = true;
-      Body.setPosition(winnerBall, { x: winnerBall.position.x, y: GOAL_Y });
-      Body.setVelocity(winnerBall, { x:0, y:0 });
-      for (let i=0;i<28;i++){
-        sparks.push({
-          x: winnerBall.position.x, y: GOAL_Y,
-          vx:(Math.random()-0.5)*9, vy:(Math.random()-1.5)*9,
-          life:1, color: LANE_COLORS[targetIndex%LANE_COLORS.length]
-        });
+  function tick(now){
+    acc += Math.min(now - last, 250);
+    last = now;
+    let steps = 0;
+    while (winner === null && acc >= STEP_MS && steps < 5){
+      race.stepOnce();
+      acc -= STEP_MS; steps++;
+      const first = balls.find(b=> b.position.y >= GOAL_Y);
+      if (first){
+        winner = first;
+        for (let i=0;i<28;i++){
+          sparks.push({
+            x: first.position.x, y: GOAL_Y,
+            vx:(Math.random()-0.5)*9, vy:(Math.random()-1.5)*9,
+            life:1, color: LANE_COLORS[first.menuIndex % LANE_COLORS.length]
+          });
+        }
+        finalize(gameId, first.menuIndex);
       }
-      finalize(gameId, targetIndex);
     }
 
-    // 카메라: 가장 앞서 있는 공을 화면 위쪽 40% 지점에 두고 트랙을 따라 스크롤
     let frontY = 0;
     balls.forEach(b=>{ if (b.position.y > frontY) frontY = b.position.y; });
     const cameraY = Math.max(0, Math.min(VIRTUAL_H - H, frontY - H*0.4));
+    renderFrame(race, cameraY, sparks, false);
 
-    ctx.clearRect(0,0,W,H);
-
-    // 진행률 표시 (화면 고정)
-    const progress = Math.min(1, frontY / VIRTUAL_H);
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,.12)";
-    ctx.fillRect(0, 0, W, 5);
-    ctx.fillStyle = "#2ff9ff";
-    ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 8;
-    ctx.fillRect(0, 0, W*progress, 5);
-    ctx.restore();
-
-    // GOAL 라인 (화면에 보일 때만)
-    const goalScreenY = GOAL_Y - cameraY;
-    if (goalScreenY > -40 && goalScreenY < H+40){
-      ctx.save();
-      for (let x=0; x<W; x+=16){
-        ctx.fillStyle = (Math.floor(x/16)%2===0) ? "#fff" : "#111";
-        ctx.fillRect(x, goalScreenY, 16, 10);
-      }
-      ctx.fillStyle = "#fff";
-      ctx.font = "900 14px Orbitron, sans-serif";
-      ctx.textAlign = "center";
-      ctx.shadowColor = "#fff"; ctx.shadowBlur = 10;
-      ctx.fillText("GOAL", W/2, goalScreenY - 10);
-      ctx.restore();
-    }
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(47,249,255,.8)";
-    ctx.lineWidth = 5;
-    ctx.lineJoin = "round";
-    ctx.shadowColor = "#2ff9ff"; ctx.shadowBlur = 16;
-    [leftPts, rightPts].forEach(pts=>{
-      ctx.beginPath();
-      let started = false;
-      pts.forEach(p=>{
-        const py = p.y - cameraY;
-        if (py < -60 || py > H+60) { started = false; return; }
-        if (!started){ ctx.moveTo(p.x, py); started = true; }
-        else ctx.lineTo(p.x, py);
-      });
-      ctx.stroke();
-    });
-    ctx.restore();
-
-    ctx.save();
-    windmills.forEach(w=>{
-      const wy = w.position.y - cameraY;
-      if (wy < -60 || wy > H+60) return;
-      const armLen = CORRIDOR_HALF_W*2*0.85*0.8;
-      ctx.save();
-      ctx.translate(w.position.x, wy);
-      ctx.rotate(w.angle);
-      ctx.strokeStyle = "rgba(255,230,47,.9)";
-      ctx.lineWidth = 10;
-      ctx.lineCap = "round";
-      ctx.shadowColor = "#ffe62f"; ctx.shadowBlur = 16;
-      ctx.beginPath();
-      ctx.moveTo(-armLen/2, 0); ctx.lineTo(armLen/2, 0);
-      ctx.moveTo(0, -armLen/2); ctx.lineTo(0, armLen/2);
-      ctx.stroke();
-      ctx.fillStyle = "#fff";
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(0, 0, 7, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    });
-    ctx.restore();
-
-    for (let i=flashes.length-1;i>=0;i--){
-      const f = flashes[i];
-      f.life -= 0.07;
-      if (f.life <= 0){ flashes.splice(i,1); continue; }
-      const fy = f.y - cameraY;
-      ctx.save();
-      ctx.globalAlpha = Math.max(f.life,0);
-      ctx.strokeStyle = "#ffe62f";
-      ctx.lineWidth = 3;
-      ctx.shadowColor = "#ffe62f"; ctx.shadowBlur = 18;
-      ctx.beginPath();
-      ctx.arc(f.x, fy, 8 + (1-f.life)*16, 0, Math.PI*2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // 공들 그리기 (메뉴별 색상)
-    balls.forEach(b=>{
-      const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
-      ctx.save();
-      ctx.beginPath();
-      ctx.fillStyle = color;
-      ctx.shadowColor = color; ctx.shadowBlur = 14;
-      ctx.arc(b.position.x, b.position.y - cameraY, 9, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    });
-
-    // 실시간 순위 표시 (화면 좌상단 고정)
-    const ranked = [...balls].sort((a,b)=>b.position.y - a.position.y);
-    ctx.save();
-    ctx.font = "700 11px 'Noto Sans KR', sans-serif";
-    ctx.textAlign = "left";
-    ranked.forEach((b,i)=>{
-      const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
-      const label = options[b.menuIndex].length > 6 ? options[b.menuIndex].slice(0,6)+"…" : options[b.menuIndex];
-      const y = 18 + i*15;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(10, y-4, 4, 0, Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,.85)";
-      ctx.fillText(`${i+1}. ${label}`, 20, y);
-    });
-    ctx.restore();
-
-    for (let i=sparks.length-1;i>=0;i--){
-      const s = sparks[i];
-      s.x += s.vx; s.y += s.vy; s.vy += 0.3; s.life -= 0.03;
-      if (s.life <= 0){ sparks.splice(i,1); continue; }
-      ctx.save();
-      ctx.globalAlpha = Math.max(s.life,0);
-      ctx.fillStyle = s.color;
-      ctx.shadowColor = s.color; ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y - cameraY, 3, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
-
-    // 우측 상단 미니맵: 전체 트랙 + 현재 화면 범위 + 공들 위치
-    (function drawMinimap(){
-      const mmW = 54, mmH = 150;
-      const mmX = W - mmW - 10, mmY = 10;
-      const scaleX = mmW / W, scaleY = mmH / VIRTUAL_H;
-
-      ctx.save();
-      ctx.fillStyle = "rgba(6,3,15,.78)";
-      ctx.strokeStyle = "rgba(255,255,255,.28)";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.roundRect(mmX, mmY, mmW, mmH, 7);
-      ctx.fill(); ctx.stroke();
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(mmX, mmY, mmW, mmH);
-      ctx.clip();
-
-      ctx.strokeStyle = "rgba(47,249,255,.4)";
-      ctx.lineWidth = 1;
-      [leftPts, rightPts].forEach(pts=>{
-        ctx.beginPath();
-        pts.forEach((p,i)=>{
-          const px = mmX + p.x*scaleX, py = mmY + p.y*scaleY;
-          if (i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
-        });
-        ctx.stroke();
-      });
-
-      const goalMy = mmY + GOAL_Y*scaleY;
-      ctx.strokeStyle = "rgba(255,255,255,.7)";
-      ctx.setLineDash([2,2]);
-      ctx.beginPath();
-      ctx.moveTo(mmX, goalMy); ctx.lineTo(mmX+mmW, goalMy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      const viewTop = mmY + cameraY*scaleY;
-      const viewH = Math.max(H*scaleY, 2);
-      ctx.strokeStyle = "rgba(255,230,47,.9)";
-      ctx.lineWidth = 1.3;
-      ctx.strokeRect(mmX+1, viewTop, mmW-2, viewH);
-
-      balls.forEach(b=>{
-        const color = LANE_COLORS[b.menuIndex % LANE_COLORS.length];
-        const px = mmX + b.position.x*scaleX;
-        const py = mmY + b.position.y*scaleY;
-        ctx.beginPath();
-        ctx.fillStyle = color;
-        ctx.shadowColor = color; ctx.shadowBlur = 5;
-        ctx.arc(px, py, 2.4, 0, Math.PI*2);
-        ctx.fill();
-      });
-      ctx.restore();
-      ctx.restore();
-    })();
-
-    if (!winnerFinished || sparks.length || flashes.length) requestAnimationFrame(tick);
+    if (winner === null || sparks.length || race.flashes.length) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 }
