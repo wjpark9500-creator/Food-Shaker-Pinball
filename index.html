@@ -747,6 +747,27 @@ function startPinball(targetIndex){
   const CORRIDOR_PHASE = Math.random() * Math.PI * 2; // 매 발사마다 통로가 처음 굽이치는 방향을 랜덤화
   const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2 + CORRIDOR_PHASE);
 
+  // 계속 떨어지기만 하는 게 아니라, 한쪽 끝(왼쪽/오른쪽)으로 천천히 쭉 미끄러져서
+  // 한동안 그대로 머무르는 구간 - 지그재그 낙하에 변화를 줌
+  const sideSlideSpots = [
+    { y: bumperZoneEnd*0.16, targetX: CORRIDOR_HALF_W + 20, holdHalf: 260, approach: 520 },   // 왼쪽 끝으로
+    { y: bumperZoneEnd*0.58, targetX: W - CORRIDOR_HALF_W - 20, holdHalf: 260, approach: 520 }, // 오른쪽 끝으로
+  ];
+  function applySideSlide(y, cx){
+    let result = cx;
+    sideSlideSpots.forEach(spot=>{
+      const dist = Math.abs(y - spot.y);
+      if (dist <= spot.holdHalf){
+        result = spot.targetX; // 완전히 고정 - 옆으로 이동해서 머무는 구간
+      } else if (dist < spot.holdHalf + spot.approach){
+        const t = 1 - (dist - spot.holdHalf) / spot.approach;
+        const smooth = t*t*(3-2*t);
+        result = result*(1-smooth) + spot.targetX*smooth;
+      }
+    });
+    return result;
+  }
+
   // 트랙 중간중간, 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
   const narrowSpots = [
     { y: bumperZoneEnd*0.35, halfW: 9.5, transition: 550, recenter: 900 },
@@ -764,6 +785,7 @@ function startPinball(targetIndex){
         cx = cx*(1-smooth) + (W/2)*smooth;
       }
     });
+    cx = applySideSlide(y, cx);
     return cx;
   }
   function halfWidthAt(y){
@@ -813,7 +835,7 @@ function startPinball(targetIndex){
   const windmillSpots = [0.20, 0.55, 0.87];
   const windmills = windmillSpots.map(frac=>{
     const wy = bumperZoneEnd*frac;
-    const wx = corridorCenterX(wy);
+    const wx = corridorCxAt(wy);
     const armLen = CORRIDOR_HALF_W*2*0.85*0.8;
     const barA = Bodies.rectangle(wx, wy, armLen, 10, {});
     const barB = Bodies.rectangle(wx, wy, 10, armLen, {});
@@ -833,7 +855,7 @@ function startPinball(targetIndex){
   }
   const balls = options.map((opt, i)=>{
     const slot = slotOrder[i];
-    const startCx = corridorCenterX(50);
+    const startCx = corridorCxAt(50);
     const spread = Math.min(CORRIDOR_HALF_W*1.3, 12*n);
     const startX = startCx + (n<=1 ? 0 : (slot/(n-1) - 0.5) * spread);
     const b = Bodies.circle(startX, 22 + (Math.random()*20), 9,
@@ -893,18 +915,19 @@ function startPinball(targetIndex){
     }
 
     // 결승선 보정: 사전에 확정된 우승자가 반드시 1등으로 통과하도록 하되,
-    // 트랙 초반부터 아주 약하게, 계속 조금씩만 밀어줘서 "막판에 갑자기" 티가 안 나게 함
+    // 트랙 절반 이상은 순수하게 자연스러운 혼돈에 맡겨서(누가 앞설지 진짜 모르게) 긴장감을 살리고,
+    // 후반부에만 부드럽게(스무스하게 강도가 올라가는 방식으로) 보정을 걸어 티가 안 나게 함
+    const CORRECTION_START = 0.48; // 이 지점 전까지는 그 누구도 보정 없음
     if (!winnerFinished){
       let leader = balls[0];
       balls.forEach(b=>{ if (b.position.y > leader.position.y) leader = b; });
 
-      if (leader !== winnerBall && leader.position.y > bumperZoneEnd*0.05){
+      if (leader !== winnerBall && leader.position.y > bumperZoneEnd*CORRECTION_START){
         const gap = Math.max(0, leader.position.y - winnerBall.position.y);
-        const progressFrac = Math.min(1, leader.position.y / bumperZoneEnd);
-        // 한 번에 확 밀지 않고, 격차와 진행도에 비례해서 아주 조금씩만(프레임당 최대 0.9) 조정.
-        // 트랙 초반부터 시작해서 충분히 이른 시점에 자연스럽게 앞서가도록 하는 게 목표 -
-        // 그래야 결승선 직전 안전장치가 실제로는 거의 발동될 일이 없음
-        const nudge = Math.min(gap * 0.01, 0.9) * (0.5 + 0.5*progressFrac);
+        const rawT = (leader.position.y/bumperZoneEnd - CORRECTION_START) / (1 - CORRECTION_START);
+        const t = Math.min(1, Math.max(0, rawT));
+        const smooth = t*t*(3-2*t); // 스무스스텝 - 갑자기 켜지지 않고 부드럽게 강해짐
+        const nudge = Math.min(gap * 0.02, 1.8) * smooth;
         Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: winnerBall.velocity.y + nudge });
         Body.setVelocity(leader, { x: leader.velocity.x, y: leader.velocity.y - nudge*0.5 });
       }
