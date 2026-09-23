@@ -689,11 +689,30 @@ function startPinball(targetIndex){
   const CORRIDOR_STEP = 40;     // 벽을 몇 px 간격으로 근사할지
   const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2);
 
+  // 트랙 중간중간, 통로 폭이 부드럽게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
+  const narrowSpots = [
+    { y: bumperZoneEnd*0.35, halfW: 15, transition: 220 },
+    { y: bumperZoneEnd*0.72, halfW: 15, transition: 220 },
+  ];
+  function halfWidthAt(y){
+    let hw = CORRIDOR_HALF_W;
+    narrowSpots.forEach(spot=>{
+      const dist = Math.abs(y - spot.y);
+      if (dist < spot.transition){
+        const t = 1 - dist/spot.transition;
+        const smooth = t*t*(3-2*t); // smoothstep - 급격한 벽 없이 부드럽게 좁아짐
+        hw = hw*(1-smooth) + spot.halfW*smooth;
+      }
+    });
+    return hw;
+  }
+
   const leftPts = [], rightPts = [];
   for (let y=40; y<=bumperZoneEnd; y+=CORRIDOR_STEP){
     const cx = corridorCenterX(y);
-    leftPts.push({ x: cx - CORRIDOR_HALF_W, y });
-    rightPts.push({ x: cx + CORRIDOR_HALF_W, y });
+    const hw = halfWidthAt(y);
+    leftPts.push({ x: cx - hw, y });
+    rightPts.push({ x: cx + hw, y });
   }
   function addWallChain(pts){
     for (let i=0;i<pts.length-1;i++){
@@ -709,6 +728,20 @@ function startPinball(targetIndex){
   }
   addWallChain(leftPts);
   addWallChain(rightPts);
+
+  // 천천히 시계 방향으로 도는 풍차 장애물 - 통로 폭이 넓은 구간에 배치
+  const windmillSpots = [0.20, 0.55, 0.87];
+  const windmills = windmillSpots.map(frac=>{
+    const wy = bumperZoneEnd*frac;
+    const wx = corridorCenterX(wy);
+    const armLen = CORRIDOR_HALF_W*2*0.85;
+    const barA = Bodies.rectangle(wx, wy, armLen, 12, {});
+    const barB = Bodies.rectangle(wx, wy, 12, armLen, {});
+    const windmill = Body.create({ parts:[barA, barB], isStatic:true, friction:0.05, restitution:0.4, label:"windmill" });
+    windmill.spinSpeed = 0.006; // 아주 천천히 회전
+    World.add(world, windmill);
+    return windmill;
+  });
 
   // 메뉴 하나당 공 하나 - 출발선(통로 시작 위치)에 나란히 배치
   const balls = options.map((opt, i)=>{
@@ -748,6 +781,8 @@ function startPinball(targetIndex){
   function tick(){
     Engine.update(engine, 1000/60);
     frameCount++;
+
+    windmills.forEach(w=> Body.setAngle(w, w.angle + w.spinSpeed));
 
     // 정체 방지: 좁은 게이트 위에 끼어서 안 내려가는 공은 주기적으로 확인해서 살짝 흔들어 탈출시킴
     if (frameCount % 75 === 0){
@@ -849,6 +884,31 @@ function startPinball(targetIndex){
         else ctx.lineTo(p.x, py);
       });
       ctx.stroke();
+    });
+    ctx.restore();
+
+    ctx.save();
+    windmills.forEach(w=>{
+      const wy = w.position.y - cameraY;
+      if (wy < -60 || wy > H+60) return;
+      const armLen = CORRIDOR_HALF_W*2*0.85;
+      ctx.save();
+      ctx.translate(w.position.x, wy);
+      ctx.rotate(w.angle);
+      ctx.strokeStyle = "rgba(255,230,47,.9)";
+      ctx.lineWidth = 10;
+      ctx.lineCap = "round";
+      ctx.shadowColor = "#ffe62f"; ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.moveTo(-armLen/2, 0); ctx.lineTo(armLen/2, 0);
+      ctx.moveTo(0, -armLen/2); ctx.lineTo(0, armLen/2);
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(0, 0, 7, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
     });
     ctx.restore();
 
