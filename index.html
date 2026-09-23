@@ -682,15 +682,30 @@ function startPinball(targetIndex){
     Bodies.rectangle(W+8, VIRTUAL_H/2, 16, VIRTUAL_H, {isStatic:true}),
   ]);
 
+  // 트랙 곳곳에 병목 게이트(좁은 통로) 배치 - 공들이 여기서 한꺼번에 몰려 부딪힘
+  const gateFracs = [0.14, 0.30, 0.46, 0.62, 0.78, 0.92];
+  const gateCenterFracs = [0.30, 0.68, 0.5, 0.35, 0.65, 0.5];
+  const GATE_GAP = 66;
+  const GATE_BAND = 34; // 게이트 주변 이 범위(y) 안쪽엔 페그를 안 깔아서 완전 막힘 방지
+  const gates = gateFracs.map((frac, gi)=>({
+    y: bumperZoneEnd*frac,
+    gapCenterX: W*gateCenterFracs[gi % gateCenterFracs.length]
+  }));
+
   const pegs = [];
   const rows = 150; // 공이 여러 개라 개수를 살짝 줄여서 성능 여유 확보
+  const PEG_MARGIN = 16;
   for (let r=0;r<rows;r++){
     const y = 80 + r*((bumperZoneEnd-140)/rows);
+    if (gates.some(g=>Math.abs(y-g.y) < GATE_BAND)) continue; // 게이트 근처는 페그 제외
     const stagger = r % 2 === 0;
     const cols = 6;
+    const spacing = (W - PEG_MARGIN*2) / (cols-1);
     for (let c=0;c<cols;c++){
-      const x = (stagger?30:60) + c*((W-60)/(cols-1));
-      if (x < 15 || x > W-15) continue;
+      let x = PEG_MARGIN + c*spacing + (stagger ? spacing*0.5 : 0);
+      // 지그재그 오프셋 때문에 화면 밖으로 밀려나는 페그는 버리지 않고 경계 안쪽으로 당겨서
+      // 오른쪽(또는 왼쪽) 벽을 따라 장애물이 하나도 없는 "뚫린 통로"가 생기지 않게 함
+      x = Math.max(PEG_MARGIN, Math.min(W - PEG_MARGIN, x));
       const isKicker = (r % 3 === 1) && (c === 1 || c === 4);
       const body = Bodies.circle(x, y, isKicker ? 11 : 6, {
         isStatic:true,
@@ -702,6 +717,18 @@ function startPinball(targetIndex){
     }
   }
   World.add(world, pegs);
+
+  gates.forEach(g=>{
+    const leftW = Math.max(0, g.gapCenterX - GATE_GAP/2);
+    const rightStart = g.gapCenterX + GATE_GAP/2;
+    const rightW = Math.max(0, W - rightStart);
+    if (leftW > 6){
+      World.add(world, Bodies.rectangle(leftW/2, g.y, leftW, 16, { isStatic:true, restitution:0.5, friction:0.02, label:"gate" }));
+    }
+    if (rightW > 6){
+      World.add(world, Bodies.rectangle(rightStart+rightW/2, g.y, rightW, 16, { isStatic:true, restitution:0.5, friction:0.02, label:"gate" }));
+    }
+  });
 
   // 메뉴 하나당 공 하나 - 출발선에 나란히 배치
   const balls = options.map((opt, i)=>{
@@ -736,9 +763,23 @@ function startPinball(targetIndex){
   });
 
   const winnerBall = balls[targetIndex];
+  balls.forEach(b=>{ b.lastCheckY = b.position.y; });
+  let frameCount = 0;
 
   function tick(){
     Engine.update(engine, 1000/60);
+    frameCount++;
+
+    // 정체 방지: 좁은 게이트 위에 끼어서 안 내려가는 공은 주기적으로 확인해서 살짝 흔들어 탈출시킴
+    if (frameCount % 75 === 0){
+      balls.forEach(b=>{
+        if (b.finished) return;
+        if (Math.abs(b.position.y - b.lastCheckY) < 12){
+          Body.setVelocity(b, { x: b.velocity.x + (Math.random()-0.5)*10, y: Math.max(b.velocity.y, 4) });
+        }
+        b.lastCheckY = b.position.y;
+      });
+    }
 
     balls.forEach(b=>{
       if (b.finished) return;
@@ -836,6 +877,19 @@ function startPinball(targetIndex){
       ctx.shadowBlur = isKicker ? 18 : 8;
       ctx.arc(p.position.x, py, isKicker ? 11 : 6, 0, Math.PI*2);
       ctx.fill();
+    });
+    ctx.restore();
+
+    ctx.save();
+    gates.forEach(g=>{
+      const gy = g.y - cameraY;
+      if (gy < -20 || gy > H+20) return;
+      const leftW = Math.max(0, g.gapCenterX - GATE_GAP/2);
+      const rightStart = g.gapCenterX + GATE_GAP/2;
+      ctx.fillStyle = "rgba(177,75,255,.85)";
+      ctx.shadowColor = "#b14bff"; ctx.shadowBlur = 14;
+      if (leftW > 0) ctx.fillRect(0, gy-8, leftW, 16);
+      if (W-rightStart > 0) ctx.fillRect(rightStart, gy-8, W-rightStart, 16);
     });
     ctx.restore();
 
