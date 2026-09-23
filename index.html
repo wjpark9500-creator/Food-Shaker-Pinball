@@ -742,15 +742,15 @@ function startPinball(targetIndex){
   // 모래시계처럼 좌우로 꿈틀대며 이어지는 통로 - 페그/게이트 대신 이 통로만으로 낙하 경로를 만듦
   const CORRIDOR_AMP = 90;      // 좌우로 흔들리는 폭
   const CORRIDOR_WAVELEN = 820; // 한 번 좌->우->좌 왕복하는 데 걸리는 세로 길이
-  const CORRIDOR_HALF_W = 75;   // 통로 절반 폭 (전체 폭 150 - 공 여러 개가 부대끼기 딱 좋은 정도)
+  const CORRIDOR_HALF_W = 95;   // 통로 절반 폭 (전체 폭 190 - 조금 더 넓게)
   const CORRIDOR_STEP = 40;     // 벽을 몇 px 간격으로 근사할지
   const CORRIDOR_PHASE = Math.random() * Math.PI * 2; // 매 발사마다 통로가 처음 굽이치는 방향을 랜덤화
   const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2 + CORRIDOR_PHASE);
 
   // 트랙 중간중간, 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
   const narrowSpots = [
-    { y: bumperZoneEnd*0.35, halfW: 15, transition: 90, recenter: 600 },
-    { y: bumperZoneEnd*0.72, halfW: 15, transition: 90, recenter: 600 },
+    { y: bumperZoneEnd*0.35, halfW: 11, transition: 90, recenter: 600 },
+    { y: bumperZoneEnd*0.72, halfW: 11, transition: 90, recenter: 600 },
   ];
   function corridorCxAt(y){
     let cx = corridorCenterX(y);
