@@ -702,7 +702,7 @@ function startPinball(targetIndex){
       const len = Math.sqrt(dx*dx+dy*dy);
       const angle = Math.atan2(dy, dx);
       const seg = Bodies.rectangle((a.x+b.x)/2, (a.y+b.y)/2, len+6, 14, {
-        isStatic:true, angle, friction:0.015, restitution:0.55, label:"wall"
+        isStatic:true, angle, friction:0.04, restitution:0.1, label:"wall"
       });
       World.add(world, seg);
     }
@@ -719,8 +719,6 @@ function startPinball(targetIndex){
       { restitution:0.66, friction:0.02, frictionAir:0.0006, density:0.0025, label:"ball" });
     b.menuIndex = i;
     b.finished = false;
-    b.tensionZones = [0.08,0.18,0.28,0.38,0.48,0.58,0.68,0.78,0.88,0.95]
-      .map(frac=>({ y: bumperZoneEnd*frac, triggeredAt:null, done:false }));
     Body.setVelocity(b, { x:(Math.random()-0.5)*2, y:1 });
     return b;
   });
@@ -762,22 +760,6 @@ function startPinball(targetIndex){
       });
     }
 
-    balls.forEach(b=>{
-      if (b.finished) return;
-      b.tensionZones.forEach(zone=>{
-        if (!zone.done && zone.triggeredAt === null && b.position.y > zone.y){
-          zone.triggeredAt = performance.now();
-        }
-        if (zone.triggeredAt !== null && !zone.done){
-          if (performance.now() - zone.triggeredAt < 500){
-            Body.setVelocity(b, { x: b.velocity.x*0.9, y: b.velocity.y*0.25 });
-          } else {
-            zone.done = true;
-          }
-        }
-      });
-    });
-
     // 결승선 근처 보정: 사전에 확정된 우승자가 반드시(하지만 자연스럽게) 1등으로 통과하도록
     if (!winnerFinished){
       let leader = balls[0];
@@ -786,8 +768,13 @@ function startPinball(targetIndex){
       if (leader !== winnerBall && leader.position.y > bumperZoneEnd*0.7){
         const progressFrac = Math.min(1, (leader.position.y - bumperZoneEnd*0.7) / (VIRTUAL_H - bumperZoneEnd*0.7));
         // 우승자를 슬쩍 밀어주고, 현재 선두는 살짝 늦춤 (막판 역전 연출)
-        Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: winnerBall.velocity.y + 5*progressFrac });
-        Body.setVelocity(leader, { x: leader.velocity.x, y: leader.velocity.y * (1 - 0.12*progressFrac) });
+        // 매 프레임 누적되지 않도록 "속도를 더하기"가 아니라 "최소 속도를 보장"하는 방식으로 캡을 씌움
+        const minWinnerSpeed = 4 + 6*progressFrac;
+        if (winnerBall.velocity.y < minWinnerSpeed){
+          Body.setVelocity(winnerBall, { x: winnerBall.velocity.x, y: minWinnerSpeed });
+        }
+        const maxLeaderSpeed = leader.velocity.y * (1 - 0.06*progressFrac);
+        Body.setVelocity(leader, { x: leader.velocity.x, y: maxLeaderSpeed });
       }
 
       // 확실한 안전장치: 우승자가 통과하기 전까지는 그 누구도 결승선을 통과할 수 없음
