@@ -689,19 +689,29 @@ function startPinball(targetIndex){
   const CORRIDOR_STEP = 40;     // 벽을 몇 px 간격으로 근사할지
   const corridorCenterX = (y)=> W/2 + CORRIDOR_AMP * Math.sin((y / CORRIDOR_WAVELEN) * Math.PI*2);
 
-  // 트랙 중간중간, 통로 폭이 부드럽게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
+  // 트랙 중간중간, 화면 정중앙에서 직선으로 급격하게 좁아졌다 넓어지는 "한 명씩만 통과" 구간
   const narrowSpots = [
-    { y: bumperZoneEnd*0.35, halfW: 15, transition: 220 },
-    { y: bumperZoneEnd*0.72, halfW: 15, transition: 220 },
+    { y: bumperZoneEnd*0.35, halfW: 15, transition: 100 },
+    { y: bumperZoneEnd*0.72, halfW: 15, transition: 100 },
   ];
+  function corridorCxAt(y){
+    let cx = corridorCenterX(y);
+    narrowSpots.forEach(spot=>{
+      const dist = Math.abs(y - spot.y);
+      if (dist < spot.transition){
+        const t = 1 - dist/spot.transition; // 선형(직선) 보간 - 급격하고 가파른 깔때기
+        cx = cx*(1-t) + (W/2)*t; // 정중앙으로 잡아당김
+      }
+    });
+    return cx;
+  }
   function halfWidthAt(y){
     let hw = CORRIDOR_HALF_W;
     narrowSpots.forEach(spot=>{
       const dist = Math.abs(y - spot.y);
       if (dist < spot.transition){
-        const t = 1 - dist/spot.transition;
-        const smooth = t*t*(3-2*t); // smoothstep - 급격한 벽 없이 부드럽게 좁아짐
-        hw = hw*(1-smooth) + spot.halfW*smooth;
+        const t = 1 - dist/spot.transition; // 선형(직선) 보간
+        hw = hw*(1-t) + spot.halfW*t;
       }
     });
     return hw;
@@ -709,7 +719,7 @@ function startPinball(targetIndex){
 
   const leftPts = [], rightPts = [];
   for (let y=40; y<=bumperZoneEnd; y+=CORRIDOR_STEP){
-    const cx = corridorCenterX(y);
+    const cx = corridorCxAt(y);
     const hw = halfWidthAt(y);
     leftPts.push({ x: cx - hw, y });
     rightPts.push({ x: cx + hw, y });
@@ -738,7 +748,7 @@ function startPinball(targetIndex){
     const barA = Bodies.rectangle(wx, wy, armLen, 12, {});
     const barB = Bodies.rectangle(wx, wy, 12, armLen, {});
     const windmill = Body.create({ parts:[barA, barB], isStatic:true, friction:0.05, restitution:0.4, label:"windmill" });
-    windmill.spinSpeed = 0.006; // 아주 천천히 회전
+    windmill.spinSpeed = 0.009; // 회전 속도 50% 증가
     World.add(world, windmill);
     return windmill;
   });
