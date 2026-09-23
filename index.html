@@ -786,20 +786,28 @@ function startPinball(targetIndex){
     leftPts.push({ x: cx - hw, y });
     rightPts.push({ x: cx + hw, y });
   }
-  function addWallChain(pts){
+  const WALL_THICKNESS = 14;
+  function addWallChain(pts, boundarySide){ // boundarySide: -1 = 왼쪽 경계선, +1 = 오른쪽 경계선
     for (let i=0;i<pts.length-1;i++){
       const a = pts[i], b = pts[i+1];
       const dx = b.x-a.x, dy = b.y-a.y;
       const len = Math.sqrt(dx*dx+dy*dy);
       const angle = Math.atan2(dy, dx);
-      const seg = Bodies.rectangle((a.x+b.x)/2, (a.y+b.y)/2, len+6, 14, {
+      // 벽을 두께의 절반만큼 바깥쪽으로 밀어서, 벽의 "중심"이 아니라 "안쪽 면"이 경계선에 오도록 함.
+      // 이렇게 안 하면 벽 두께의 절반이 통로 안쪽으로 파고들어서, 특히 좁은 구간에서
+      // 의도한 것보다 실제 빈 공간이 훨씬 좁아져(심하면 공보다도 좁아져) 버그가 생김
+      const nx = -dy/len, ny = dx/len; // y가 항상 증가하는 방향이라 이 법선은 항상 왼쪽을 향함
+      const off = -boundarySide * (WALL_THICKNESS/2);
+      const cx = (a.x+b.x)/2 + nx*off;
+      const cy = (a.y+b.y)/2 + ny*off;
+      const seg = Bodies.rectangle(cx, cy, len+6, WALL_THICKNESS, {
         isStatic:true, angle, friction:0.04, restitution:0.1, label:"wall"
       });
       World.add(world, seg);
     }
   }
-  addWallChain(leftPts);
-  addWallChain(rightPts);
+  addWallChain(leftPts, -1);
+  addWallChain(rightPts, 1);
 
   // 천천히 시계 방향으로 도는 풍차 장애물 - 통로 폭이 넓은 구간에 배치
   const windmillSpots = [0.20, 0.55, 0.87];
@@ -861,6 +869,15 @@ function startPinball(targetIndex){
   function tick(){
     Engine.update(engine, 1000/60);
     frameCount++;
+
+    // 속도 상한: 오래 떨어져서 속도가 벽 두께보다 커지면 한 프레임에 벽을 통과해버릴 수 있어서
+    // (터널링) 최고 낙하 속도를 제한해둠
+    const MAX_FALL_SPEED = 13;
+    balls.forEach(b=>{
+      if (!b.finished && b.velocity.y > MAX_FALL_SPEED){
+        Body.setVelocity(b, { x: b.velocity.x, y: MAX_FALL_SPEED });
+      }
+    });
 
     windmills.forEach(w=> Body.setAngle(w, w.angle + w.spinSpeed));
 
